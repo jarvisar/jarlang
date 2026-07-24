@@ -1,0 +1,8 @@
+Ada        1815  mathematics
+Grace      1906  computing
+Alan       1912  computing
+Katherine  1918  mathematics
+{mathematics: ["Ada", "Katherine"], computing: ["Grace", "Alan"]}
+Ada has 125
+x = 1
+y = 2

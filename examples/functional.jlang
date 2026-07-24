@@ -1,0 +1,44 @@
+# Closures, higher-order functions and pipelines
+
+make_counter = fn() {
+  count = 0
+  fn() {
+    count += 1
+    count
+  }
+}
+tick = make_counter()
+tick()
+tick()
+print("counter:", tick())
+
+compose2 = fn(f, g) => fn(x) => f(g(x))
+inc = fn(x) => x + 1
+double = fn(x) => 2x
+print("inc∘double(5) =", compose2(inc, double)(5))
+
+# Pipelines pass the left side as the first argument
+result = 1..20
+  |> filter(fn(n) => n % 3 == 0)
+  |> map(fn(n) => n^2)
+  |> reduce(fn(a, b) => a + b)
+print("sum of squares of multiples of 3 up to 20:", result)
+
+# Method syntax also works: xs.f(a) is the same as f(xs, a)
+words = split("the quick brown fox jumps over the lazy dog")
+print(words.map(len), words.filter(fn(w) => len(w) > 3).map(upper))
+print("longest:", words.sort(fn(w) => -len(w)).first())
+
+# List comprehension with a condition
+print("perfect squares:", [n for n in 1..100 if isqrt(n)^2 == n])
+
+# Pythagorean triples using nested loops
+triples = []
+for c in 1..30 {
+  for b in 1..c {
+    for a in 1..b {
+      if a^2 + b^2 == c^2 { push(triples, [a, b, c]) }
+    }
+  }
+}
+print("pythagorean triples:", triples)

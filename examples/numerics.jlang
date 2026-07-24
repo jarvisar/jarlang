@@ -1,0 +1,48 @@
+# Numerical methods (also compiles natively)
+
+# Newton's method for square roots
+fn newton_sqrt(a) {
+  x = a
+  for _ in 1..20 {
+    x = (x + a / x) / 2.0
+  }
+  x
+}
+print("newton_sqrt(2) = {newton_sqrt(2.0):.15f}")
+print("sqrt(2)        = {sqrt(2):.15f}")
+
+# Leibniz series for π
+fn leibniz(terms) {
+  total = 0.0
+  sign = 1.0
+  for k in 0..<terms {
+    total += sign / (2k + 1)
+    sign = -sign
+  }
+  4total
+}
+print("π ≈ {leibniz(100000):.6f} (100,000 terms)")
+
+# Integrate sin from 0 to π with the trapezoid rule (answer is 2)
+fn integrate_sin(a, b, n) {
+  h = (b - a) / n
+  total = (sin(a) + sin(b)) / 2.0
+  for i in 1..<n {
+    total += sin(a + i * h)
+  }
+  total * h
+}
+print("∫ sin(x) dx on [0, π] ≈ {integrate_sin(0.0, pi, 1000):.8f}")
+
+# Calculate Euler's number from its series
+e_approx = 0.0
+term = 1.0
+for n in 1..20 {
+  e_approx += term
+  term /= n
+}
+print("e ≈ {e_approx:.12f} vs {e:.12f}")
+
+# Integer math: gcd, lcm, powers and factorials
+print(gcd(1071, 462), lcm(21, 6), 2^40, 15!, isqrt(10^12 + 1))
+print(7 // 2, -7 // 2, 7 % 3, -7 % 3, 7.5 // 2, -7.5 % 2)

@@ -1,0 +1,27 @@
+# Quick tour of JarLang
+# Run with: jarlang examples/hello.jlang
+
+# Define variables here
+x = 16
+y = 9_000  # Can also use underscores in numbers
+z = x + y
+
+print("√x + z =", √x + z)                         # square root operator
+print("2x² + 3(x - 1) =", 2x^2 + 3(x - 1))        # implicit multiplication
+print("5! =", 5!, " and 0.5! ≈", round(0.5!, 6))  # factorials (also works for decimals)
+
+# Define a function like in math
+f(t) = t^2 - 2t + 1
+print("f(3) =", f(3))
+
+# Or with fn
+fn describe(n) {
+  if n < 0 { "negative" } elif n == 0 { "zero" } else { "positive" }
+}
+print("-4 is", describe(-4))
+
+# Put expressions inside strings, with optional formatting
+print("π to 5 places is {pi:.5f}, and 1/7 ≈ {1/7:.3}")
+
+# Comparisons can be chained
+print("is x in (10, 20]?", 10 < x <= 20)

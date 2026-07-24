@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Native build outputs
+*.s
+*.o
+*.exe
+!tests/golden/**/*.s
+a.out
+
+# Editor tooling
+editors/vscode/node_modules/
+editors/vscode/*.vsix
+editors/vscode/out/
+
+# Web playground build output
+playground/jarlang/
+
+# Local scratch files
+test.jlang
+.DS_Store
+CLAUDE.md

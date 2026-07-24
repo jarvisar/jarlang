@@ -1,0 +1,19 @@
+# Plot functions and lists in the terminal (uses braille characters)
+
+print("sin(x) on [-π, π]:")
+plot(fn(x) => sin(x), -pi, pi, 60, 10)
+
+f(x) = x^3 - 3x
+print("\nf(x) = x^3 - 3x:")
+plot(f, -2.5, 2.5, 60, 12)
+
+print("\nA list of numbers (the first 30 Collatz lengths):")
+fn collatz(n) {
+  steps = 0
+  while n != 1 {
+    n = if n % 2 == 0 { n // 2 } else { 3n + 1 }
+    steps += 1
+  }
+  steps
+}
+plot([collatz(n) for n in 1..30], nil, nil, 60, 8)

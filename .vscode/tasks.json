@@ -1,0 +1,57 @@
+{
+  // Run these from Terminal > Run Task
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "JarLang: Setup",
+      "type": "shell",
+      "command": "bash scripts/setup.sh",
+      "windows": { "command": "scripts\\setup.cmd --no-pause" },
+      "problemMatcher": []
+    },
+    {
+      "label": "JarLang: Playground",
+      "type": "shell",
+      "command": "bash scripts/playground.sh",
+      "windows": { "command": "scripts\\playground.cmd" },
+      "problemMatcher": []
+    },
+    {
+      "label": "JarLang: Run Tests",
+      "type": "shell",
+      "command": "bash scripts/test.sh",
+      "windows": { "command": "scripts\\test.cmd" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "JarLang: Run Current File",
+      "type": "shell",
+      "command": "bash scripts/jarlang.sh run \"${file}\"",
+      "windows": { "command": "scripts\\jarlang.cmd run \"${file}\"" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "JarLang: Run Current File Natively",
+      "type": "shell",
+      "command": "bash scripts/jarlang.sh run --native \"${file}\"",
+      "windows": { "command": "scripts\\jarlang.cmd run --native \"${file}\"" },
+      "problemMatcher": []
+    },
+    {
+      "label": "JarLang: Show Assembly for Current File",
+      "type": "shell",
+      "command": "bash scripts/jarlang.sh asm \"${file}\"",
+      "windows": { "command": "scripts\\jarlang.cmd asm \"${file}\"" },
+      "problemMatcher": []
+    },
+    {
+      "label": "JarLang: Build and Install VS Code Extension",
+      "type": "shell",
+      "command": "bash scripts/vscode-extension.sh",
+      "windows": { "command": "scripts\\vscode-extension.cmd" },
+      "problemMatcher": []
+    }
+  ]
+}

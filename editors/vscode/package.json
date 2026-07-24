@@ -1,0 +1,193 @@
+{
+  "name": "jarlang",
+  "displayName": "JarLang",
+  "description": "JarLang support with syntax highlighting, errors, autocomplete, and commands to run programs.",
+  "version": "2.0.0",
+  "publisher": "jarvisar",
+  "icon": "images/jarlang.png",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Linters"
+  ],
+  "keywords": [
+    "jarlang",
+    "jlang",
+    "math",
+    "language server"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "jarlang",
+        "aliases": [
+          "JarLang",
+          "jarlang"
+        ],
+        "extensions": [
+          ".jlang"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/jarlang.png",
+          "dark": "./images/jarlang.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jarlang",
+        "scopeName": "source.jarlang",
+        "path": "./syntaxes/jarlang.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "jarlang",
+        "path": "./snippets/jarlang.json"
+      }
+    ],
+    "configuration": {
+      "title": "JarLang",
+      "properties": {
+        "jarlang.path": {
+          "type": "string",
+          "default": "jarlang",
+          "scope": "machine-overridable",
+          "markdownDescription": "Command used to run JarLang, either `jarlang` or the full path to it (not used if `#jarlang.pythonPath#` is set)."
+        },
+        "jarlang.pythonPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "If set, runs JarLang as `<python> -m jarlang` with this Python interpreter (such as `${workspaceFolder}/.venv/Scripts/python`) instead of `#jarlang.path#`."
+        },
+        "jarlang.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Start the JarLang language server (`jarlang lsp`)."
+        },
+        "jarlang.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "scope": "window",
+          "description": "Log the messages between VS Code and the language server in the JarLang output channel."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[jarlang]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      }
+    },
+    "commands": [
+      {
+        "command": "jarlang.run",
+        "title": "Run File",
+        "category": "JarLang",
+        "icon": "$(play)"
+      },
+      {
+        "command": "jarlang.runNative",
+        "title": "Run File Natively (x86-64)",
+        "category": "JarLang",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "jarlang.showAssembly",
+        "title": "Show Assembly",
+        "category": "JarLang"
+      },
+      {
+        "command": "jarlang.showSyntaxTree",
+        "title": "Show Syntax Tree",
+        "category": "JarLang"
+      },
+      {
+        "command": "jarlang.restartServer",
+        "title": "Restart Language Server",
+        "category": "JarLang"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "jarlang.run",
+          "when": "resourceLangId == jarlang",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jarlang.runNative",
+          "when": "resourceLangId == jarlang",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "jarlang.run",
+          "when": "editorLangId == jarlang",
+          "group": "jarlang@1"
+        },
+        {
+          "command": "jarlang.showAssembly",
+          "when": "editorLangId == jarlang",
+          "group": "jarlang@2"
+        },
+        {
+          "command": "jarlang.showSyntaxTree",
+          "when": "editorLangId == jarlang",
+          "group": "jarlang@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "jarlang.run",
+          "when": "editorLangId == jarlang"
+        },
+        {
+          "command": "jarlang.runNative",
+          "when": "editorLangId == jarlang"
+        },
+        {
+          "command": "jarlang.showAssembly",
+          "when": "editorLangId == jarlang"
+        },
+        {
+          "command": "jarlang.showSyntaxTree",
+          "when": "editorLangId == jarlang"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "jarlang.run",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
+        "when": "editorLangId == jarlang"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node test/grammar.test.js && node test/extension.test.js",
+    "grammar": "python scripts/gen-grammar.py",
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository --skip-license --out jarlang.vsix"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.2.0"
+  }
+}

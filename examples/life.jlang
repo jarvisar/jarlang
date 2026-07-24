@@ -1,0 +1,64 @@
+# Conway's Game of Life (also compiles natively)
+# The grid wraps around at the edges
+
+rows = 12
+cols = 24
+
+fn empty_grid() {
+  grid = []
+  for _ in 0..<rows {
+    push(grid, [false] * cols)
+  }
+  grid
+}
+
+fn neighbours(grid, r, c) {
+  count = 0
+  for dr in -1..1 {
+    for dc in -1..1 {
+      if dr != 0 or dc != 0 {
+        if grid[(r + dr) % rows][(c + dc) % cols] { count += 1 }
+      }
+    }
+  }
+  count
+}
+
+fn step(grid) {
+  next = empty_grid()
+  for r in 0..<rows {
+    for c in 0..<cols {
+      n = neighbours(grid, r, c)
+      next[r][c] = n == 3 or (grid[r][c] and n == 2)
+    }
+  }
+  next
+}
+
+fn show(grid) {
+  for r in 0..<rows {
+    line = ""
+    for c in 0..<cols {
+      line += if grid[r][c] { "█" } else { "·" }
+    }
+    print(line)
+  }
+}
+
+grid = empty_grid()
+# Add a glider
+grid[1][2] = true
+grid[2][3] = true
+grid[3][1] = true
+grid[3][2] = true
+grid[3][3] = true
+# Add a blinker
+grid[6][15] = true
+grid[6][16] = true
+grid[6][17] = true
+
+for gen in 0..<4 {
+  print("generation {gen}:")
+  show(grid)
+  grid = step(grid)
+}

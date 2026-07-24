@@ -1,0 +1,21 @@
+# Small module used by modules.jlang
+# Import it with: import "lib/geometry"
+
+const golden_angle = pi * (3 - √5)
+
+circle_area(r) = pi * r^2
+hypotenuse(a, b) = √(a^2 + b^2)
+
+fn polygon_area(points) {
+  # Shoelace formula
+  total = 0
+  n = len(points)
+  for i in 0..<n {
+    x1, y1 = points[i]
+    x2, y2 = points[(i + 1) % n]
+    total += x1 * y2 - x2 * y1
+  }
+  abs(total) / 2
+}
+
+_helper = "names starting with _ stay private"

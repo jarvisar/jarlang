@@ -1,0 +1,43 @@
+# Working with strings and formatting
+
+name = "Ada Lovelace"
+born = 1815
+print("{name} was born in {born}; that's {2025 - born} years before 2025.")
+
+# Format specs work like Python's
+for item in [["apples", 3, 0.5], ["bananas", 12, 0.25], ["cherries", 100, 0.1]] {
+  label, qty, price = item
+  print("{label:<10}|{qty:>5}|{price * qty:>8.2f}")
+}
+print("{1234567.891:,.2f}  {255:x}  {255:08b}  {0.4567:.1%}  {"centered":^14}|")
+
+# String functions can be called as f(s) or s.f()
+s = "  Hello, World!  "
+print("[{s.trim()}]", upper("shout"), "WHISPER".lower(), len("naïve"))
+print("hello world".split(), join(["a", "b", "c"], "-"), replace("banana", "a", "o"))
+print(starts_with("jarlang", "jar"), "lang".ends_with("ng"), "an" in "banana")
+print(reverse("stressed"), chars("abc"), "ab" * 3, ord("A"), chr(9731))
+
+# Count letters with a dict
+counts = {}
+for ch in "mississippi" {
+  counts[ch] = get(counts, ch, 0) + 1
+}
+print(counts)
+print(keys(counts), values(counts))
+
+# Caesar cipher
+fn caesar(text, shift) {
+  out = ""
+  for ch in text {
+    if is_alpha(ch) {
+      base = if ch == upper(ch) { ord("A") } else { ord("a") }
+      out += chr((ord(ch) - base + shift) % 26 + base)
+    } else {
+      out += ch
+    }
+  }
+  out
+}
+secret = caesar("Attack at dawn!", 13)
+print(secret, "->", caesar(secret, 13))

@@ -1,0 +1,36 @@
+# Catch and throw errors
+
+fn safe_divide(a, b) {
+  try {
+    return a / b
+  } catch err {
+    print("caught:", err)
+    return nil
+  }
+}
+print(safe_divide(10, 4))
+print(safe_divide(1, 0))
+
+fn withdraw(balance, amount) {
+  if amount > balance {
+    throw "insufficient funds: need {amount - balance} more"
+  }
+  balance - amount
+}
+
+try {
+  withdraw(50, 80)
+} catch message {
+  print("error:", message)
+}
+
+# Can throw any value, such as a dict
+try {
+  throw {code: 404, reason: "not found"}
+} catch e {
+  print("code", e.code, "-", e.reason)
+}
+
+# assert() stops the program if the condition is false
+assert(1 + 1 == 2, "math is broken")
+print("all good")

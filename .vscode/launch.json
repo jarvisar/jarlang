@@ -1,0 +1,36 @@
+{
+  // Run these from the Run and Debug view
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "JarLang: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "jarlang",
+      "args": ["run", "${file}"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "JarLang: REPL",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "jarlang",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "JarLang: Playground",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "jarlang",
+      "args": ["playground"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "VS Code Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}/editors/vscode"]
+    }
+  ]
+}

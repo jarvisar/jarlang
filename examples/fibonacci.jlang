@@ -1,0 +1,31 @@
+# Three ways to calculate Fibonacci numbers
+
+# 1. Recursive (slow for large numbers)
+fn fib(n) {
+  if n < 2 { return n }
+  fib(n - 1) + fib(n - 2)
+}
+
+# 2. Loop with parallel assignment
+fn fib_iter(n) {
+  a, b = 0, 1
+  for _ in 1..n {
+    a, b = b, a + b
+  }
+  a
+}
+
+print("recursive:", [fib(n) for n in 0..15])
+print("iterative:", [fib_iter(n) for n in 0..15])
+
+# 3. memoize() adds a cache to the function, and recursive calls use it too
+fib = memoize(fib)
+print("fib(90) =", fib(90))
+
+# Integers can be any size in the interpreter
+print("fib_iter(300) =", fib_iter(300))
+
+# Dividing consecutive terms gives the golden ratio
+ratio = fib_iter(41) / fib_iter(40)
+print("F(41)/F(40) = {ratio:.12f}")
+print("φ           = {phi:.12f}")

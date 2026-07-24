@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarlang"
+version = "2.0.0"
+description = "A small programming language for math with an interpreter and a native x86-64 compiler"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Adam Jarvis" }]
+keywords = ["programming-language", "interpreter", "compiler", "x86-64", "education"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Assembly",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Interpreters",
+    "Environment :: Console",
+]
+dependencies = []
+
+[project.optional-dependencies]
+repl = ["prompt_toolkit>=3.0"]
+native = ["ziglang>=0.11"]
+all = ["prompt_toolkit>=3.0", "ziglang>=0.11"]
+dev = ["pytest>=7", "prompt_toolkit>=3.0", "ziglang>=0.11"]
+
+[project.scripts]
+jarlang = "jarlang.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["jarlang*"]
+
+[tool.setuptools.package-data]
+jarlang = ["native/runtime.c", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["native: needs a C toolchain to build and run native executables"]

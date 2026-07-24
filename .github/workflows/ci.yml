@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Toolchain report
+        run: python -m jarlang doctor
+
+      - name: Test suite (includes native differential tests where a toolchain exists)
+        run: python -m pytest
+
+      - name: Lint and format-check the examples
+        run: |
+          python -m jarlang check examples
+          python -m jarlang fmt --check examples
+
+      - name: Native build smoke test
+        if: runner.os != 'macOS'
+        run: |
+          python -m jarlang build examples/primes.jlang -o primes-native
+          python -m jarlang bench examples/benchmark.jlang
+
+  vscode-extension:
+    name: VS Code extension grammar
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm test

@@ -1,0 +1,30 @@
+# Mandelbrot set in ASCII art
+# Benchmark with: jarlang bench examples/mandelbrot.jlang
+
+palette = " .:-=+*#%@"
+
+fn escape_time(cr, ci, limit) {
+  zr = 0.0
+  zi = 0.0
+  n = 0
+  while n < limit and zr * zr + zi * zi <= 4.0 {
+    zr, zi = zr * zr - zi * zi + cr, 2.0 * zr * zi + ci
+    n += 1
+  }
+  n
+}
+
+width = 72
+height = 28
+limit = 200
+for row in 0..<height {
+  line = ""
+  for col in 0..<width {
+    cr = -2.2 + 3.2 * col / width
+    ci = -1.2 + 2.4 * row / height
+    n = escape_time(cr, ci, limit)
+    shade = if n == limit { 9 } else { n % 9 }
+    line = line + palette[shade]
+  }
+  print(line)
+}

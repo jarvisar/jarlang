@@ -1,0 +1,51 @@
+# Benchmark for comparing the interpreter and native compiler
+# Run with: jarlang bench examples/benchmark.jlang
+
+# 1. Recursive Fibonacci (lots of function calls)
+fn fib(n) {
+  if n < 2 { return n }
+  fib(n - 1) + fib(n - 2)
+}
+print("fib(24) =", fib(24))
+
+# 2. Count primes by trial division (integer loops)
+fn count_primes(limit) {
+  count = 0
+  for n in 2..limit {
+    d = 2
+    prime = true
+    while d * d <= n {
+      if n % d == 0 {
+        prime = false
+        break
+      }
+      d += 1
+    }
+    if prime { count += 1 }
+  }
+  count
+}
+print("primes up to 20,000:", count_primes(20000))
+
+# 3. Integrate 4/(1+x²) from 0 to 1, which equals π (decimals)
+fn integrate(steps) {
+  h = 1.0 / steps
+  total = 0.0
+  for i in 0..<steps {
+    x = (i + 0.5) * h
+    total += 4.0 / (1.0 + x * x)
+  }
+  total * h
+}
+print("π ≈ {integrate(200000):.10f}")
+
+# 4. Bubble sort a reversed list (lists)
+xs = [300 - i for i in 0..<300]
+for i in 0..<len(xs) {
+  for j in 0..<len(xs) - i - 1 {
+    if xs[j] > xs[j + 1] {
+      xs[j], xs[j + 1] = xs[j + 1], xs[j]
+    }
+  }
+}
+print("sorted:", xs[0], xs[1], xs[2], "...", xs[-1])

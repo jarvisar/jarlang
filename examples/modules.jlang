@@ -1,0 +1,9 @@
+# Import code from other files
+
+import "lib/geometry"         # use its public names directly
+import "lib/geometry" as geo  # or use them through geo
+
+print("circle area r=2:", circle_area(2))
+print("3-4-5:", hypotenuse(3, 4))
+print("unit square:", geo.polygon_area([[0, 0], [1, 0], [1, 1], [0, 1]]))
+print("golden angle: {geo.golden_angle:.4f} rad = {deg(golden_angle):.2f}°")

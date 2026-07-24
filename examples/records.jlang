@@ -1,0 +1,41 @@
+# Use dicts as records
+
+people = [
+  {name: "Ada", born: 1815, field: "mathematics"},
+  {name: "Grace", born: 1906, field: "computing"},
+  {name: "Katherine", born: 1918, field: "mathematics"},
+  {name: "Alan", born: 1912, field: "computing"},
+]
+
+for p in people.sort(fn(p) => p.born) {
+  print("{p.name:<10} {p.born}  {p.field}")
+}
+
+# Group names by field
+by_field = {}
+for p in people {
+  if not has(by_field, p.field) {
+    by_field[p.field] = []
+  }
+  push(by_field[p.field], p.name)
+}
+print(by_field)
+
+# Dicts can also hold functions, like simple objects
+fn make_account(owner) {
+  account = {owner: owner, balance: 0}
+  account.deposit = fn(amount) {
+    account.balance += amount
+    account.balance
+  }
+  account
+}
+acct = make_account("Ada")
+acct.deposit(100)
+acct.deposit(25)
+print("{acct.owner} has {acct.balance}")
+
+# Loop over keys and values
+for k, v in items({x: 1, y: 2}) {
+  print(k, "=", v)
+}
