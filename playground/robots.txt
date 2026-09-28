@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://jarlang.ajarvis.co/sitemap.xml
+Sitemap: https://jarlang.jarvisar.com/sitemap.xml

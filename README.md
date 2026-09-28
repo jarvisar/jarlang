@@ -1,7 +1,7 @@
 # Interpreter & Custom Programming Language
 This project is a custom-built programming language called JarLang, developed to gain more experience in software design and development. It features a lexer, parser, semantic analyzer, interpreter, and a native compiler that generates x86-64 assembly code. Users can write and execute code using the included interpreter or native compiler, both of which output the same result.
 
-Visit the [GitHub Pages site](https://jarlang.ajarvis.co/) to try JarLang in the browser.
+Visit the [GitHub Pages site](https://jarlang.jarvisar.com/) to try JarLang in the browser.
 
 <br>
 <p align="center">
