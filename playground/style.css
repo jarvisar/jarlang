@@ -227,6 +227,25 @@ pre,
   text-decoration: none;
 }
 
+/* The brand is the page's h1 for search engines, but should look the same as before */
+.brand-heading {
+  display: flex;
+  margin: 0;
+  font-size: inherit;
+  font-weight: normal;
+}
+
+.noscript {
+  padding: 8px 12px;
+  background: var(--well);
+  color: var(--text);
+  border-bottom: 1px solid var(--bar-border);
+}
+
+.noscript p {
+  margin: 4px 0;
+}
+
 .logo {
   width: 30px;
   height: 30px;

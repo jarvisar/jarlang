@@ -17,7 +17,7 @@ BUNDLE_DIR = "jarlang"  # relative to the site root (ignored by git)
 BUNDLE_NAME = "bundle.json"
 
 # Static files that make up the site
-STATIC_SUFFIXES = {".html", ".css", ".js", ".svg", ".png", ".ico", ".webmanifest", ".txt"}
+STATIC_SUFFIXES = {".html", ".css", ".js", ".svg", ".png", ".ico", ".webmanifest", ".txt", ".xml"}
 SKIP_PARTS = {"__pycache__", BUNDLE_DIR, "node_modules"}
 
 
