@@ -62,6 +62,16 @@
       "url": "https://jarlang.jarvisar.com/"
     }
   </script>
+  <!-- Cloudflare Web Analytics. Only on the live site, so local dev aren't counted -->
+  <script>
+    if (location.hostname === 'jarlang.jarvisar.com') {
+      const beacon = document.createElement('script');
+      beacon.type = 'module';
+      beacon.src = 'https://static.cloudflareinsights.com/beacon.min.js';
+      beacon.dataset.cfBeacon = '{"token": "a52a84e110ba48c0868dd4ae87e235b7"}';
+      document.head.appendChild(beacon);
+    }
+  </script>
 </head>
 <body>
   <header class="topbar">
