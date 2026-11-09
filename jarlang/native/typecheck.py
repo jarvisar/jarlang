@@ -10,8 +10,8 @@ from ..ast import GLOBAL
 from ..builtins import BUILTINS, CONSTANTS
 from ..errors import Diagnostic, MultipleErrors, arity_message
 from ..source import Span
-from .types import (BOOL, FLOAT, INT, NEVER, NIL, NUMERIC, STR, ListT, NumericConflict, Type, TypeConflict,
-                    join, mangle_type, show_type)
+from .types import (BOOL, FLOAT, INT, KEY_TYPES, NEVER, NIL, NUMERIC, STR, DictT, ListT, NumericConflict, TupleT,
+                    Type, TypeConflict, is_complete, is_container, join, list_of, mangle_type, show_type)
 
 NUMERIC_HELP = ("native code keeps int and float separate: write 0.0 instead of 0 "
                 "(or use float(x)) so the value is a float from the start")
@@ -29,7 +29,7 @@ NATIVE_BUILTINS = frozenset({
     "round", "min", "max", "clamp", "gcd", "lcm", "isqrt", "is_prime", "factorial", "pow", "int", "float",
     "str", "len", "upper", "lower", "trim", "push", "pop", "sum", "product", "contains", "clock", "assert",
     "exit", "range", "split", "join", "replace", "starts_with", "ends_with", "ord", "chr", "chars", "input",
-    "sort", "reverse", "index_of",
+    "sort", "reverse", "index_of", "is_alpha", "is_digit", "get", "has", "keys", "values", "items",
 })
 
 SUPPORTED_HINT = "the native compiler supports a subset of JarLang; run this program with the interpreter instead"
@@ -356,11 +356,8 @@ class TypeChecker:
             self.loop_depth -= 1
             return NIL
         if isinstance(node, ast.For):
-            if len(node.targets) != 1:
-                self.unsupported("multiple loop variables", node.targets[1].span)
-                return NIL
             elem = self.iter_elem(node.iterable)
-            self.assign_name(node.targets[0], elem, node.targets[0].span)
+            self.assign_loop_targets(node.targets, elem, node.iterable)
             self.loop_depth += 1
             self.block(node.body.stmts, need_value=False)
             self.loop_depth -= 1
@@ -393,17 +390,16 @@ class TypeChecker:
     def assign(self, node: ast.Assign) -> None:
         target = node.target
         if isinstance(target, ast.ListLit):
-            if isinstance(node.value, ast.ListLit) and len(node.value.items) == len(target.items):
+            count = len(target.items)
+            if isinstance(node.value, ast.ListLit) and len(node.value.items) == count:
                 types = [self.expr(v) for v in node.value.items]
-                for t_node, t in zip(target.items, types):
-                    if isinstance(t_node, ast.Name):
-                        self.assign_name(t_node, t, node.span)
-                    elif isinstance(t_node, ast.Index):
-                        self.assign_index(t_node, t, node.span)
-                    else:
-                        self.unsupported("assigning to fields", t_node.span)
-                return
-            self.unsupported("unpacking a list into several variables", node.span)
+            else:
+                # The value's type is recorded on the target too, so codegen knows how to unpack it
+                value_t = self.expr(node.value)
+                self.cur.types[id(target)] = value_t
+                types = self.unpack_types(value_t, count, node.span, loop=False)
+            for t_node, t in zip(target.items, types):
+                self.assign_target(t_node, t, node.span)
             return
         value_t = self.expr(node.value)
         if node.op is not None:
@@ -412,12 +408,45 @@ class TypeChecker:
                 self.cur.types[id(target)] = current
             value_t = self.binary_type(node.op, current, value_t, node.span, node.value)
             self.cur.types[id(node)] = value_t
+        self.assign_target(target, value_t, node.span)
+
+    def assign_target(self, target: ast.Expr, t: Type, span: Span) -> None:
         if isinstance(target, ast.Name):
-            self.assign_name(target, value_t, node.span)
+            self.assign_name(target, t, span)
         elif isinstance(target, ast.Index):
-            self.assign_index(target, value_t, node.span)
-        else:
-            self.unsupported("fields and dicts", target.span)
+            self.assign_index(target, t, span)
+        elif isinstance(target, ast.Field):
+            self.assign_field(target, t, span)
+        else:  # pragma: no cover - the parser only allows the targets above
+            self.error("invalid assignment target", target.span)
+
+    def unpack_types(self, t: Type, count: int, span: Span, loop: bool, over_dict: bool = False) -> list[Type]:
+        """Types of the variables when a value of type t is unpacked into count variables."""
+        what = "loop variables" if loop else "variables"
+        if isinstance(t, TupleT):
+            if len(t.elems) == count:
+                return list(t.elems)
+            self.error(f"cannot unpack {len(t.elems)} values into {count} {what}", span)
+        elif isinstance(t, ListT):
+            if t.elem is not None:
+                return [t.elem] * count
+            self.error("cannot infer the element type of this list", span,
+                       helps=["push at least one value, or give it a type: let xs: list[int] = []"])
+        elif t == STR and not loop:
+            return [STR] * count
+        elif t is not None:
+            helps = ["iterate over items(d) to get pairs of keys and values"] if over_dict else []
+            self.error(f"cannot unpack {show_type(t)} into {count} {what}", span, helps=helps)
+        return [None] * count
+
+    def assign_loop_targets(self, targets: list[ast.Name], elem: Type, iterable: ast.Expr) -> None:
+        if len(targets) == 1:
+            self.assign_name(targets[0], elem, targets[0].span)
+            return
+        over_dict = isinstance(self.cur.types.get(id(iterable)), DictT)
+        types = self.unpack_types(elem, len(targets), iterable.span, loop=True, over_dict=over_dict)
+        for target, t in zip(targets, types):
+            self.assign_name(target, t, target.span)
 
     def assign_index(self, target: ast.Index, value_t: Type, span: Span) -> None:
         obj_t = self.expr(target.obj)
@@ -428,10 +457,93 @@ class TypeChecker:
             if idx_t is not None and idx_t != INT:
                 self.error(f"list index must be int, found {show_type(idx_t)}", target.index.span)
             self.refine_list(target.obj, obj_t, value_t, span)
+        elif isinstance(obj_t, TupleT):
+            elem = self.tuple_elem(obj_t, target)
+            if elem is not None and value_t is not None and value_t != NEVER and _join_or_none(elem, value_t) != elem:
+                self.error(f"cannot store {show_type(value_t)} in a list item of type {show_type(elem)}", span,
+                           helps=["each position of a list that mixes types keeps its type in native code"])
+        elif isinstance(obj_t, DictT):
+            self.check_key(obj_t, idx_t, target.index.span, store=True)
+            self.refine_dict(target.obj, obj_t, idx_t, value_t, span)
         elif obj_t == STR:
             self.error("strings are immutable", target.span)
         else:
-            self.unsupported(f"indexing {show_type(obj_t)}", target.span)
+            self.error(f"cannot assign into {show_type(obj_t)}", target.span)
+
+    def assign_field(self, target: ast.Field, value_t: Type, span: Span) -> None:
+        obj_t = self.expr(target.obj)
+        if obj_t is None:
+            return
+        if not isinstance(obj_t, DictT):
+            self.error(f"cannot set field `{target.name}` on {show_type(obj_t)}", target.span,
+                       helps=["only dicts have fields"])
+            return
+        self.check_key(obj_t, STR, target.span, store=True)
+        self.refine_dict(target.obj, obj_t, STR, value_t, span)
+
+    def refine_dict(self, obj: ast.Expr, dict_t: DictT, key_t: Type, val_t: Type, span: Span) -> None:
+        """Update the dict type when a value is stored in it."""
+        if key_t is None or val_t is None or val_t == NEVER or key_t not in KEY_TYPES:
+            return
+        try:
+            new = join(dict_t, DictT(key_t, val_t))
+        except TypeConflict as exc:
+            if dict_t.key is not None and dict_t.key != key_t:
+                return  # check_key reported it
+            helps = ["native dicts hold a single value type"]
+            if isinstance(exc, NumericConflict):
+                helps.append(NUMERIC_HELP)
+            self.error(f"cannot store {show_type(val_t)} in a {show_type(dict_t)}", span, helps=helps)
+            return
+        if new == dict_t:
+            return
+        if isinstance(obj, ast.Name):
+            self.assign_name(obj, new, span)
+        elif dict_t.key is not None and dict_t.val is not None:
+            self.error(f"cannot store {show_type(val_t)} in a {show_type(dict_t)}", span)
+
+    def check_key(self, dict_t: DictT, key_t: Type, span: Span, store: bool = False) -> bool:
+        """Check a key used to look up (or store) a value."""
+        if key_t is None:
+            return False
+        if key_t not in KEY_TYPES:
+            self.bad_key(key_t, span)
+            return False
+        if dict_t.key is None or key_t == dict_t.key:
+            return True
+        # 2 finds the key 2.0, but storing 2 would print as 2 in the interpreter and 2.0 here
+        if key_t == INT and dict_t.key == FLOAT and not store:
+            return True
+        helps = [NUMERIC_HELP] if key_t in NUMERIC and dict_t.key in NUMERIC else \
+            ["native dicts hold a single key type"]
+        self.error(f"this dict has {show_type(dict_t.key)} keys, found {show_type(key_t)}", span, helps=helps)
+        return False
+
+    def bad_key(self, t: Type, span: Span) -> Type:
+        if is_container(t):  # the interpreter's message
+            return self.error(f"{'dict' if isinstance(t, DictT) else 'list'} cannot be used as a dict key", span)
+        return self.error(f"{show_type(t)} dict keys are not supported by the native compiler", span,
+                          helps=["native dict keys are int, float, bool, or str"])
+
+    def tuple_elem(self, t: TupleT, node: ast.Index) -> Type:
+        """Type of t[i]. Lists that mix types can only be indexed with a number, e.g. item[0]."""
+        i = _const_int(node.index)
+        n = len(t.elems)
+        if i is None:
+            return self.error(f"this list mixes {_mix(t)}, so native code can only index it with a number, "
+                              "e.g. item[0]", node.index.span,
+                              helps=["unpack it instead, e.g. a, b = item", *_mix_helps(t)])
+        if not -n <= i < n:
+            return self.error(f"index {i} is out of range for list of length {n}", node.span)
+        return t.elems[i]
+
+    def homogeneous(self, t: Type, what: str, span: Span) -> bool:
+        """Report an error for a list that mixes types where only a single element type works."""
+        if isinstance(t, TupleT):
+            self.error(f"{what} needs a list with one element type, but this list mixes {_mix(t)}", span,
+                       helps=["native lists hold a single element type", *_mix_helps(t)])
+            return False
+        return True
 
     def refine_list(self, obj: ast.Expr, list_t: ListT, elem_t: Type, span: Span) -> None:
         """Update the list type when a value of type elem_t is stored in it."""
@@ -477,6 +589,11 @@ class TypeChecker:
             return None
         if isinstance(t, ListT):
             return t.elem
+        if isinstance(t, DictT):
+            return t.key
+        if isinstance(t, TupleT):
+            return self.error(f"cannot loop over a list that mixes {_mix(t)} in native code", iterable.span,
+                              helps=["native lists hold a single element type", *_mix_helps(t)])
         if t == STR:
             return STR
         return self.error(f"cannot iterate over {show_type(t)}", iterable.span)
@@ -523,7 +640,7 @@ class TypeChecker:
                         self.error(f"format spec {part.spec!r} is not supported by the native compiler", part.span,
                                    helps=["supported: [[fill]align][sign][0][width][,][.precision][type]"])
                     elif t is not None and t not in (INT, FLOAT, STR, BOOL):
-                        self.unsupported(f"format specs on {show_type(t)}", part.span)
+                        self.unsupported(f"format specs on {show_type(t)} values", part.span)
                     elif t is not None and not _spec_fits(t, m):
                         # Same message as the interpreter, which fails at run time
                         self.error(f"invalid format spec {part.spec!r} for {show_type(t)}", part.span)
@@ -538,25 +655,28 @@ class TypeChecker:
             if t.elem is not None:
                 self._printable(t.elem, span)
             return
+        if isinstance(t, TupleT):
+            for e in t.elems:
+                self._printable(e, span)
+            return
+        if isinstance(t, DictT):
+            for e in (t.key, t.val):
+                if e is not None:
+                    self._printable(e, span)
+            return
         self.error(f"cannot print {show_type(t)}", span)
 
     def e_Name(self, node: ast.Name) -> Type:
         return self.var_type(node)
 
     def e_ListLit(self, node: ast.ListLit) -> Type:
-        elem: Type = None
-        for item in node.items:
-            t = self.expr(item)
-            try:
-                elem = join(elem, t)
-            except TypeConflict as exc:
-                helps = ["native lists hold a single element type"]
-                if isinstance(exc, NumericConflict):
-                    helps.append("write every number as a float, e.g. [1.0, 2.5]")
-                return self.error(f"list mixes {show_type(elem)} and {show_type(t)}", item.span, helps=helps)
-        if elem == NIL:
+        types = [self.expr(item) for item in node.items]
+        if any(t is None for t in types):
+            return None  # wait until every item's type is known, or a mix would look like a single type
+        t = list_of(types)
+        if t == ListT(NIL):
             return self.error("lists of nil are not supported natively", node.span)
-        return ListT(elem)
+        return t
 
     def e_Unary(self, node: ast.Unary) -> Type:
         t = self.expr(node.operand)
@@ -572,7 +692,7 @@ class TypeChecker:
         return t
 
     def _truthy(self, t: Type, span: Span) -> None:
-        if t in (BOOL, INT, FLOAT, STR, NIL) or isinstance(t, ListT):
+        if t in (BOOL, INT, FLOAT, STR, NIL) or is_container(t):
             return
         self.error(f"cannot test {show_type(t)} for truth", span)
 
@@ -625,8 +745,10 @@ class TypeChecker:
                 continue
             if a == b and (a == STR or a in (BOOL, NIL) and op in ("==", "!=")):
                 continue
-            if isinstance(a, ListT) and isinstance(b, ListT) or \
-                    op in ("==", "!=") and (isinstance(a, ListT) or isinstance(b, ListT)):
+            if isinstance(a, DictT) or isinstance(b, DictT):
+                self.unsupported("comparing dicts", node.span)
+                continue
+            if is_container(a) and is_container(b) or op in ("==", "!=") and (is_container(a) or is_container(b)):
                 self.unsupported("comparing lists", node.span)
                 continue
             if op in ("==", "!="):
@@ -672,10 +794,15 @@ class TypeChecker:
     def e_Index(self, node: ast.Index) -> Type:
         ot = self.expr(node.obj)
         it = self.expr(node.index)
+        if isinstance(ot, DictT):
+            self.check_key(ot, it, node.index.span)
+            return ot.val
         if it is not None and it != INT:
             self.error(f"index must be int, found {show_type(it)}", node.index.span)
         if ot is None:
             return None
+        if isinstance(ot, TupleT):
+            return self.tuple_elem(ot, node)
         if isinstance(ot, ListT):
             if ot.elem is None:
                 return self.error("cannot infer the element type of this list", node.obj.span,
@@ -686,11 +813,9 @@ class TypeChecker:
         return self.error(f"cannot index into {show_type(ot)}", node.span)
 
     def e_Comprehension(self, node: ast.Comprehension) -> Type:
-        if len(node.targets) != 1:
-            return self.unsupported("multiple loop variables", node.targets[1].span)
         elem = self.iter_elem(node.iterable)
         self.scopes.append(id(node))
-        self.assign_name(node.targets[0], elem, node.targets[0].span)
+        self.assign_loop_targets(node.targets, elem, node.iterable)
         if node.cond is not None:
             self.condition(node.cond)
         t = self.expr(node.expr)
@@ -751,6 +876,13 @@ class TypeChecker:
             self.changed = True
         self.reached.add(key)
         self.cur.calls[id(node)] = inst
+        # The function can fill an empty list or dict it was given, e.g. push(xs, "a"), which tells the
+        # caller what the list holds
+        for p, t, arg_node in zip(params, final, node.args):
+            if isinstance(arg_node, ast.Name) and is_container(t) and not is_complete(t):
+                refined = _join_or_none(t, inst.vars.get((id(func), p.slot)))
+                if refined is not None and refined != t:
+                    self.assign_name(arg_node, refined, arg_node.span)
         return inst.ret
 
     # Builtins
@@ -878,9 +1010,70 @@ class TypeChecker:
                 self._printable(ts[0], args[0].span)
             return STR
         if name == "len":
-            if arity(1, 1) and ts[0] is not None and ts[0] != STR and not isinstance(ts[0], ListT):
+            if arity(1, 1) and ts[0] is not None and ts[0] != STR and not is_container(ts[0]):
                 self.error(f"len() of {show_type(ts[0])} is undefined", args[0].span)
             return INT
+        # A list that mixes types only works with the builtins above and below that don't need one element type
+        if name in ("min", "max", "sum", "product", "sort", "reverse", "index_of", "push", "pop", "contains",
+                    "join") and n:
+            first = 1 if name == "join" and n == 2 and ts[0] == STR else 0
+            if not self.homogeneous(ts[first], f"`{name}`", args[first].span):
+                return None
+        if name in ("is_alpha", "is_digit"):
+            if arity(1, 1) and ts[0] is not None and ts[0] != STR:
+                self.error(f"`{name}` expects a string, found {show_type(ts[0])}", args[0].span)
+            return BOOL
+        if name in ("keys", "values", "items"):
+            if not arity(1, 1) or ts[0] is None:
+                return None
+            d = ts[0]
+            if not isinstance(d, DictT):
+                return self.error(f"{name}() needs a dict, found {show_type(d)}", args[0].span)
+            if name == "keys":
+                return ListT(d.key)
+            if name == "values":
+                return ListT(d.val)
+            if d.key is None or d.val is None:
+                return ListT(None)
+            return ListT(list_of([d.key, d.val]))
+        if name == "has":
+            if not arity(2, 2) or ts[0] is None:
+                return BOOL
+            if not isinstance(ts[0], DictT):
+                self.error(f"has() needs a dict, found {show_type(ts[0])}", args[0].span)
+            else:
+                self.check_key(ts[0], ts[1], args[1].span)
+            return BOOL
+        if name == "get":
+            if not arity(2, 3) or ts[0] is None:
+                return None
+            coll = ts[0]
+            if isinstance(coll, DictT):
+                self.check_key(coll, ts[1], args[1].span)
+                item = coll.val
+            elif isinstance(coll, ListT):
+                integer(1)
+                item = coll.elem
+            elif isinstance(coll, TupleT):
+                self.homogeneous(coll, "`get`", args[0].span)
+                return None
+            else:
+                return self.error(f"get() needs a dict, found {show_type(coll)}", args[0].span)
+            if n == 2:
+                if item == NIL:
+                    return NIL
+                return self.error("get() without a default returns nil for a missing key, and native code can't "
+                                  f"mix nil with {show_type(item)}", node.span,
+                                  helps=["pass a default of the same type, e.g. get(d, key, 0)"])
+            default = ts[2]
+            try:
+                return join(item, default)
+            except TypeConflict as exc:
+                helps = ["the default needs the same type as the values"]
+                if isinstance(exc, NumericConflict):
+                    helps.append(NUMERIC_HELP)
+                return self.error(f"get() default is {show_type(default)} but the values are {show_type(item)}",
+                                  args[2].span, helps=helps)
         if name in ("upper", "lower", "trim"):
             if arity(1, 1) and ts[0] is not None and ts[0] != STR:
                 self.error(f"`{name}` expects a string, found {show_type(ts[0])}", args[0].span)
@@ -1019,27 +1212,66 @@ class TypeChecker:
         if isinstance(coll, ListT):
             if coll.elem is not None and not _comparable(item, coll.elem):
                 self.error(f"cannot look for {show_type(item)} in {show_type(coll)}", span)
-            elif isinstance(coll.elem, ListT):
+            elif isinstance(coll.elem, DictT):
+                self.unsupported("comparing dicts", span)
+            elif is_container(coll.elem):
                 self.unsupported("comparing lists", span)
+        elif isinstance(coll, DictT):
+            self.check_key(coll, item, span)
+        elif isinstance(coll, TupleT):
+            self.homogeneous(coll, what, span)
         elif coll == STR:
             if item != STR:
                 self.error(f"{what} on a string needs a string, found {show_type(item)}", span)
         else:
-            self.error(f"{what} needs a list or string, found {show_type(coll)}", span)
+            self.error(f"{what} needs a list, string, or dict, found {show_type(coll)}", span)
+
+    # Dicts
+    def e_DictLit(self, node: ast.DictLit) -> Type:
+        key: Type = None
+        val: Type = None
+        for k_node, v_node in node.entries:
+            kt = self.expr(k_node)
+            vt = self.expr(v_node)
+            if kt is None or vt is None:
+                return None
+            if kt not in KEY_TYPES:
+                return self.bad_key(kt, k_node.span)
+            try:
+                key = join(key, kt)
+            except TypeConflict as exc:
+                helps = ["native dicts hold a single key type"]
+                if isinstance(exc, NumericConflict):
+                    helps.append(NUMERIC_HELP)
+                return self.error(f"dict mixes {show_type(key)} and {show_type(kt)} keys", k_node.span, helps=helps)
+            try:
+                val = join(val, vt)
+            except TypeConflict as exc:
+                helps = ["native dicts hold a single value type"]
+                if isinstance(exc, NumericConflict):
+                    helps.append(NUMERIC_HELP)
+                return self.error(f"dict mixes {show_type(val)} and {show_type(vt)} values", v_node.span,
+                                  helps=helps)
+        return DictT(key, val)
+
+    def e_Field(self, node: ast.Field) -> Type:
+        t = self.expr(node.obj)
+        if t is None:
+            return None
+        if not isinstance(t, DictT):
+            return self.error(f"{show_type(t)} has no field `{node.name}`", node.name_span or node.span,
+                              helps=["only dicts have fields"])
+        if not self.check_key(t, STR, node.name_span or node.span):
+            return None
+        return t.val
 
     # Unsupported expressions
-    def e_DictLit(self, node: ast.DictLit) -> Type:
-        return self.unsupported("dicts", node.span)
-
     def e_Lambda(self, node: ast.Lambda) -> Type:
         return self.unsupported("anonymous functions", node.span)
 
     def e_RangeExpr(self, node: ast.RangeExpr) -> Type:
         return self.error("ranges can only be used in `for` loops and comprehensions in native code",
                           node.span, helps=["build a list with [i for i in a..b]"])
-
-    def e_Field(self, node: ast.Field) -> Type:
-        return self.unsupported("fields and dicts", node.span)
 
     def e_Slice(self, node: ast.Slice) -> Type:
         return self.unsupported("slices", node.span)
@@ -1088,6 +1320,46 @@ def _comparable(a: Type, b: Type) -> bool:
     if a in NUMERIC and b in NUMERIC:
         return True
     return a == b
+
+
+def _join_or_none(a: Type, b: Type) -> Type:
+    try:
+        return join(a, b)
+    except TypeConflict:
+        return None
+
+
+def _const_int(node: ast.Expr) -> int | None:
+    """The value of an int literal such as 2 or -1, or None."""
+    if isinstance(node, ast.Literal) and type(node.value) is int:
+        return node.value
+    if isinstance(node, ast.Unary) and node.op == "-" and isinstance(node.operand, ast.Literal) \
+            and type(node.operand.value) is int:
+        return -node.operand.value
+    return None
+
+
+def _mix(t: TupleT) -> str:
+    """The different types in a list that mixes types, e.g. "str, int, and float"."""
+    names: list[str] = []
+    for e in t.elems:
+        if show_type(e) not in names:
+            names.append(show_type(e))
+    if len(names) <= 2:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+def _mix_helps(t: TupleT) -> list[str]:
+    try:
+        elem: Type = None
+        for e in t.elems:
+            elem = join(elem, e)
+    except NumericConflict:
+        return ["write every number as a float, e.g. [1.0, 2.5]"]
+    except TypeConflict:
+        pass
+    return []
 
 
 def _describe(node: ast.Node) -> str:

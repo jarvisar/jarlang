@@ -168,6 +168,17 @@ typedef struct {
     i64 *data;
 } JlList;
 
+/* Entries are kept in insertion order, with an open-addressing index into them.
+   len comes first, like in JlList, so the generated code reads both lengths the same way */
+typedef struct {
+    i64 len;
+    i64 cap;
+    i64 *keys;
+    i64 *vals;
+    i64 *slots;  /* entry position + 1, or 0 for an empty slot */
+    i64 nslots;  /* 0 or a power of 2 */
+} JlDict;
+
 JlList *jl_list_new(i64 cap);
 JlList *jl_list_push(JlList *l, i64 bits);
 JlList *jl_list_concat(JlList *a, JlList *b);
@@ -236,6 +247,22 @@ static void sb_quoted(JlSb *sb, const char *s) {
     sb_putc(sb, '"');
 }
 
+/* Type descriptors (made by descriptor() in types.py): i int, f float, b bool, s str, n nil,
+   L<elem> list, T<elems>) list that mixes types, D<key><value> dict */
+
+/* The rest of desc after one complete type */
+static const char *desc_skip(const char *desc) {
+    switch (desc[0]) {
+        case 'L': return desc_skip(desc + 1);
+        case 'D': return desc_skip(desc_skip(desc + 1));
+        case 'T':
+            desc++;
+            while (*desc && *desc != ')') desc = desc_skip(desc);
+            return *desc ? desc + 1 : desc;
+        default: return *desc ? desc + 1 : desc;
+    }
+}
+
 static const char *sb_value(JlSb *sb, i64 bits, const char *desc);
 
 void jl_sb_list(JlSb *sb, JlList *l, const char *desc) {
@@ -247,19 +274,66 @@ void jl_sb_list(JlSb *sb, JlList *l, const char *desc) {
     sb_putc(sb, ']');
 }
 
+/* desc has one type per item, followed by ')' */
+static void sb_mixed_list(JlSb *sb, JlList *l, const char *desc) {
+    sb_putc(sb, '[');
+    for (i64 i = 0; i < l->len && *desc && *desc != ')'; i++) {
+        if (i) sb_append(sb, ", ");
+        desc = sb_value(sb, l->data[i], desc);
+    }
+    sb_putc(sb, ']');
+}
+
+/* Must match KEYWORDS in tokens.py (checked by the tests) */
+static const char *const JL_KEYWORDS[] = {
+    "and", "break", "catch", "const", "continue", "elif", "else", "false", "fn", "for", "if",
+    "import", "in", "let", "nil", "not", "or", "return", "throw", "true", "try", "while", NULL,
+};
+
+/* Whether a dict key prints without quotes. Only ASCII names count, unlike Python's str.isidentifier() */
+static int is_bare_key(const char *s) {
+    if (!(isalpha((unsigned char)s[0]) || s[0] == '_')) return 0;
+    for (const char *p = s; *p; p++)
+        if (!(isalnum((unsigned char)*p) || *p == '_') || (unsigned char)*p >= 0x80) return 0;
+    for (int i = 0; JL_KEYWORDS[i]; i++)
+        if (strcmp(s, JL_KEYWORDS[i]) == 0) return 0;
+    return 1;
+}
+
+static void sb_dict(JlSb *sb, JlDict *d, const char *key_desc) {
+    const char *val_desc = desc_skip(key_desc);
+    sb_putc(sb, '{');
+    for (i64 i = 0; i < d->len; i++) {
+        if (i) sb_append(sb, ", ");
+        if (key_desc[0] == 's' && is_bare_key((const char *)(intptr_t)d->keys[i]))
+            sb_append(sb, (const char *)(intptr_t)d->keys[i]);
+        else
+            sb_value(sb, d->keys[i], key_desc);
+        sb_append(sb, ": ");
+        sb_value(sb, d->vals[i], val_desc);
+    }
+    sb_putc(sb, '}');
+}
+
 /* Append one value described by desc and return the rest of desc */
 static const char *sb_value(JlSb *sb, i64 bits, const char *desc) {
     double d;
     switch (desc[0]) {
-        case 'i': jl_sb_int(sb, bits); return desc + 1;
-        case 'f': memcpy(&d, &bits, 8); jl_sb_float(sb, d); return desc + 1;
-        case 'b': jl_sb_bool(sb, bits); return desc + 1;
-        case 's': sb_quoted(sb, (const char *)(intptr_t)bits); return desc + 1;
-        case 'n': jl_sb_nil(sb); return desc + 1;
-        case 'L': jl_sb_list(sb, (JlList *)(intptr_t)bits, desc + 1); return desc + 1;
-        default: jl_sb_int(sb, bits); return desc + 1;
+        case 'i': jl_sb_int(sb, bits); break;
+        case 'f': memcpy(&d, &bits, 8); jl_sb_float(sb, d); break;
+        case 'b': jl_sb_bool(sb, bits); break;
+        case 's': sb_quoted(sb, (const char *)(intptr_t)bits); break;
+        case 'n': jl_sb_nil(sb); break;
+        case 'L': jl_sb_list(sb, (JlList *)(intptr_t)bits, desc + 1); break;
+        case 'T': sb_mixed_list(sb, (JlList *)(intptr_t)bits, desc + 1); break;
+        case 'D': sb_dict(sb, (JlDict *)(intptr_t)bits, desc + 1); break;
+        default: jl_sb_int(sb, bits); break;
     }
+    return desc_skip(desc);
 }
+
+/* Any value, with its full descriptor (used for lists that mix types and dicts) */
+void jl_sb_value(JlSb *sb, i64 bits, const char *desc) { sb_value(sb, bits, desc); }
 
 const char *jl_sb_finish(JlSb *sb) { return sb->buf; }
 
@@ -547,6 +621,14 @@ void jl_print_list(JlList *l, const char *desc) {
     free(sb);
 }
 
+void jl_print_value(i64 bits, const char *desc) {
+    JlSb *sb = jl_sb_new();
+    sb_value(sb, bits, desc);
+    fputs(sb->buf, stdout);
+    free(sb->buf);
+    free(sb);
+}
+
 /* Strings */
 
 const char *jl_str_concat(const char *a, const char *b) {
@@ -821,6 +903,27 @@ const char *jl_str_from_list(JlList *l, const char *desc) {
     return sb->buf;
 }
 
+const char *jl_str_from_value(i64 bits, const char *desc) {
+    JlSb *sb = jl_sb_new();
+    sb_value(sb, bits, desc);
+    return sb->buf;
+}
+
+/* Like Python's str.isalpha() and str.isdigit(), but only for ASCII characters */
+i64 jl_str_is_alpha(const char *s) {
+    if (!*s) return 0;
+    for (; *s; s++)
+        if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z'))) return 0;
+    return 1;
+}
+
+i64 jl_str_is_digit(const char *s) {
+    if (!*s) return 0;
+    for (; *s; s++)
+        if (!(*s >= '0' && *s <= '9')) return 0;
+    return 1;
+}
+
 static char *clean_number(const char *s) {
     while (*s && isspace((unsigned char)*s)) s++;
     size_t n = strlen(s);
@@ -1052,6 +1155,165 @@ double jl_list_minmax_float(JlList *l, i64 want_max, i64 line) {
         if (want_max ? v > best : v < best) best = v;
     }
     return best;
+}
+
+/* get(xs, i, default) */
+i64 jl_list_get_or(JlList *l, i64 i, i64 fallback) {
+    if (i < 0) i += l->len;
+    return (i >= 0 && i < l->len) ? l->data[i] : fallback;
+}
+
+/* loop is 1 for `for a, b in xs`, which has its own message in the interpreter */
+NORETURN void jl_panic_unpack(i64 n, i64 count, i64 loop, i64 line) {
+    char msg[128];
+    snprintf(msg, sizeof msg, "cannot unpack %" PRId64 " values into %" PRId64 " %svariables", n, count,
+             loop ? "loop " : "");
+    jl_panic(msg, line);
+}
+
+/* Dicts. kind is the key's descriptor: 'i' int, 'b' bool, 'f' float (as bits), or 's' str */
+
+static uint64_t mix64(uint64_t x) {
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+static uint64_t key_hash(i64 key, i64 kind) {
+    if (kind == 's') {
+        uint64_t h = 0xcbf29ce484222325ULL;
+        for (const unsigned char *p = (const unsigned char *)(intptr_t)key; *p; p++) h = (h ^ *p) * 0x100000001b3ULL;
+        return mix64(h);
+    }
+    if (kind == 'f') {
+        double d;
+        memcpy(&d, &key, 8);
+        if (d == 0) key = 0; /* -0.0 and 0.0 are the same key */
+    }
+    return mix64((uint64_t)key);
+}
+
+static int key_eq(i64 a, i64 b, i64 kind) {
+    if (kind == 's') return strcmp((const char *)(intptr_t)a, (const char *)(intptr_t)b) == 0;
+    if (kind == 'f') {
+        double x, y;
+        memcpy(&x, &a, 8);
+        memcpy(&y, &b, 8);
+        return x == y;
+    }
+    return a == b;
+}
+
+JlDict *jl_dict_new(void) {
+    JlDict *d = jl_alloc(sizeof *d);
+    memset(d, 0, sizeof *d);
+    return d;
+}
+
+/* Position of the key's entry, or -1 */
+static i64 dict_find(JlDict *d, i64 key, i64 kind) {
+    if (!d->nslots) return -1;
+    uint64_t mask = (uint64_t)d->nslots - 1;
+    for (uint64_t i = key_hash(key, kind) & mask;; i = (i + 1) & mask) {
+        i64 e = d->slots[i];
+        if (!e) return -1;
+        if (key_eq(d->keys[e - 1], key, kind)) return e - 1;
+    }
+}
+
+static void dict_index_entry(JlDict *d, i64 pos, i64 kind) {
+    uint64_t mask = (uint64_t)d->nslots - 1;
+    uint64_t i = key_hash(d->keys[pos], kind) & mask;
+    while (d->slots[i]) i = (i + 1) & mask;
+    d->slots[i] = pos + 1;
+}
+
+void jl_dict_set(JlDict *d, i64 key, i64 val, i64 kind) {
+    i64 pos = dict_find(d, key, kind);
+    if (pos >= 0) {
+        d->vals[pos] = val;
+        return;
+    }
+    if (d->len == d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 4;
+        d->keys = jl_realloc(d->keys, sizeof(i64) * (size_t)d->cap);
+        d->vals = jl_realloc(d->vals, sizeof(i64) * (size_t)d->cap);
+    }
+    d->keys[d->len] = key;
+    d->vals[d->len] = val;
+    d->len++;
+    /* Keep the index at most half full */
+    if (d->len * 2 > d->nslots) {
+        free(d->slots);
+        d->nslots = d->nslots ? d->nslots * 2 : 8;
+        d->slots = jl_alloc(sizeof(i64) * (size_t)d->nslots);
+        memset(d->slots, 0, sizeof(i64) * (size_t)d->nslots);
+        for (i64 i = 0; i < d->len; i++) dict_index_entry(d, i, kind);
+    } else {
+        dict_index_entry(d, d->len - 1, kind);
+    }
+}
+
+i64 jl_dict_get(JlDict *d, i64 key, i64 kind, i64 line) {
+    i64 pos = dict_find(d, key, kind);
+    if (pos < 0) {
+        char desc[2] = {(char)kind, 0};
+        JlSb *sb = jl_sb_new();
+        sb_append(sb, "key ");
+        sb_value(sb, key, desc);
+        sb_append(sb, " not found in dict");
+        jl_panic(sb->buf, line);
+    }
+    return d->vals[pos];
+}
+
+/* d.name */
+i64 jl_dict_field(JlDict *d, const char *name, i64 line) {
+    i64 pos = dict_find(d, (i64)(intptr_t)name, 's');
+    if (pos < 0) {
+        JlSb *sb = jl_sb_new();
+        sb_append(sb, "dict has no key `");
+        sb_append(sb, name);
+        sb_putc(sb, '`');
+        jl_panic(sb->buf, line);
+    }
+    return d->vals[pos];
+}
+
+i64 jl_dict_get_or(JlDict *d, i64 key, i64 fallback, i64 kind) {
+    i64 pos = dict_find(d, key, kind);
+    return pos < 0 ? fallback : d->vals[pos];
+}
+
+i64 jl_dict_has(JlDict *d, i64 key, i64 kind) { return dict_find(d, key, kind) >= 0; }
+
+JlList *jl_dict_keys(JlDict *d) {
+    JlList *out = jl_list_new(d->len);
+    if (d->len) memcpy(out->data, d->keys, sizeof(i64) * (size_t)d->len);
+    out->len = d->len;
+    return out;
+}
+
+JlList *jl_dict_values(JlDict *d) {
+    JlList *out = jl_list_new(d->len);
+    if (d->len) memcpy(out->data, d->vals, sizeof(i64) * (size_t)d->len);
+    out->len = d->len;
+    return out;
+}
+
+/* [[key, value], ...] */
+JlList *jl_dict_items(JlDict *d) {
+    JlList *out = jl_list_new(d->len);
+    for (i64 i = 0; i < d->len; i++) {
+        JlList *pair = jl_list_new(2);
+        pair->data[0] = d->keys[i];
+        pair->data[1] = d->vals[i];
+        pair->len = 2;
+        out->data[out->len++] = (i64)(intptr_t)pair;
+    }
+    return out;
 }
 
 /* Math */

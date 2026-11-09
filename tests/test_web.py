@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from jarlang import __version__, web
+from support import EXAMPLES
 
 
 # Run
@@ -315,7 +316,7 @@ def test_asm_defaults_to_linux_and_can_skip_the_optimizer():
 
 
 def test_asm_unsupported_program_gets_a_friendly_diagnostic():
-    r = web.asm('d = {name: "Ada"}\nprint(d.name)')
+    r = web.asm("f = fn(x) => x * 2\nprint(f(3))")
     assert r["ok"] is False
     assert r["asm"] == ""
     assert "not supported by the native compiler" in r["stderr"]
@@ -342,6 +343,20 @@ def test_explain():
     assert r["text"].startswith("native type inference for main.jlang")
     assert "fn sq(x: int) -> int" in r["text"]
     assert "fn sq(x: float) -> float" in r["text"]
+
+
+def test_asm_for_the_strings_example():
+    code = (EXAMPLES / "strings.jlang").read_text(encoding="utf-8")
+    r = web.asm(code)
+    assert r["ok"], r["stderr"]
+    assert "call jl_dict_set@PLT" in r["asm"]
+
+
+def test_explain_shows_dicts_and_lists_that_mix_types():
+    r = web.explain('counts = {}\ncounts["a"] = 1\nrow = ["apples", 3, 0.5]\nprint(counts, row)')
+    assert r["ok"], r["stderr"]
+    assert "counts: dict[str, int]" in r["text"]
+    assert "row: [str, int, float]" in r["text"]
 
 
 def test_explain_unsupported_program():
@@ -384,7 +399,7 @@ def test_check_syntax_error():
 
 
 def test_check_native_mode_reports_unsupported_features():
-    code = 'd = {a: 1}\nprint(d)'
+    code = "f = fn(x) => x * 2\nprint(f(3))"
     assert web.check(code)["ok"] is True
     assert web.check(code, native=True)["ok"] is False
 

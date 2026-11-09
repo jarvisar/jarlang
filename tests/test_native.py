@@ -14,7 +14,7 @@ from jarlang.resolver import Resolver
 from jarlang.source import Source
 from support import EXAMPLES, native_toolchain, requires_native, run_program
 
-NATIVE_EXAMPLES = ["hello", "primes", "mandelbrot", "sorting", "life", "numerics", "benchmark"]
+NATIVE_EXAMPLES = ["hello", "primes", "mandelbrot", "sorting", "life", "numerics", "benchmark", "strings"]
 
 
 def asm(code: str, target: str = "linux") -> str:
@@ -86,14 +86,58 @@ def test_explain_lists_instances():
     assert "fn sq(x: int) -> int" in text
 
 
+def test_dict_and_mixed_list_types_inferred():
+    c = checker_for('counts = {}\nfor ch in "abc" { counts[ch] = get(counts, ch, 0) + 1 }\n'
+                    'row = ["apples", 3, 0.5]\nlabel, qty, price = row\nrows = [row, ["pears", 1, 2.5]]\n'
+                    'pairs = items({a: 1.5})\nprint(counts, label, qty, price, rows, pairs)')
+    types = {name: str(t) for name, t in c.globals.items()}
+    assert types["counts"] == "dict[str, int]"
+    assert types["row"] == "[str, int, float]"
+    assert (types["label"], types["qty"], types["price"]) == ("str", "int", "float")
+    assert types["rows"] == "list[[str, int, float]]"
+    assert types["pairs"] == "list[[str, float]]"
+
+
+def test_containers_filled_by_a_function_get_their_type_in_the_caller():
+    c = checker_for('fn add(l) { push(l, "a") }\nfn put(d) { d[1] = 2.5 }\nxs = []\nm = {}\nadd(xs)\nput(m)\n'
+                    'print(xs, m)')
+    assert (str(c.globals["xs"]), str(c.globals["m"])) == ("list[str]", "dict[int, float]")
+
+
+def test_runtime_keywords_match_the_lexer():
+    import re
+    from pathlib import Path
+    from jarlang.tokens import KEYWORDS
+    runtime = (Path(__file__).resolve().parent.parent / "jarlang" / "native" / "runtime.c").read_text(encoding="utf-8")
+    block = re.search(r"JL_KEYWORDS\[\] = \{(.*?)\};", runtime, re.S).group(1)
+    assert set(re.findall(r'"(\w+)"', block)) == set(KEYWORDS)
+
+
 @pytest.mark.parametrize("code, message", [
     ("f = fn(x) => x\nprint(f(1))", "anonymous functions are not supported"),
-    ("d = {a: 1}\nprint(d)", "dicts are not supported"),
+    ('d = {a: 1, b: "x"}\nprint(d)', "dict mixes int and str values"),
+    ("d = {a: 1}\nprint(d[1])", "this dict has str keys, found int"),
+    ("d = {1.5: 1}\nd[2] = 3", "this dict has float keys, found int"),
+    ('d = {a: 1}\nd["b"] = 2.5', "cannot store float in a dict[str, int]"),
+    ("d = {[1]: 2}", "list cannot be used as a dict key"),
+    ('d = {a: 1}\nprint(get(d, "a"))', "get() without a default returns nil"),
+    ('d = {a: 1}\nprint(get(d, "a", "none"))', "get() default is str but the values are int"),
+    ("d = {a: 1}\nprint(d == d)", "comparing dicts is not supported"),
+    ('d = {a: 1}\nprint("{d:>9}")', "format specs on dict[str, int] values are not supported"),
+    ("x = 5\nprint(x.y)", "int has no field `y`"),
+    ("print(keys([1]))", "keys() needs a dict, found list[int]"),
+    ('d = {a: 1}\nfor k, v in d { print(k) }', "cannot unpack str into 2 loop variables"),
     ("try { print(1) } catch e { print(e) }", "`try`/`catch` blocks are not supported"),
     ("fn outer() { n = 1; fn inner() => n; inner() }\nprint(outer())", "nested functions are not supported"),
     ("x = 1\nx = 2.5", "`x` holds int but is assigned float"),
     ("x = 1\nx = \"s\"", "`x` holds int but is assigned str"),
-    ("print([1, 2.5])", "list mixes int and float"),
+    ("print(sum([1, 2.5]))", "`sum` needs a list with one element type, but this list mixes int and float"),
+    ('for x in ["a", 1] { print(x) }', "cannot loop over a list that mixes str and int"),
+    ('t = ["a", 1]\ni = 0\nprint(t[i])', "native code can only index it with a number"),
+    ('t = ["a", 1]\nprint(t[2])', "index 2 is out of range for list of length 2"),
+    ('t = ["a", 1]\nt[0] = 5', "cannot store int in a list item of type str"),
+    ('a, b, c = ["x", 1]', "cannot unpack 2 values into 3 variables"),
+    ("a, b = 5", "cannot unpack int into 2 variables"),
     ("print(1 and 2)", "`and` needs bool operands"),
     ("fn f(n) { if n > 0 { return 1 }; 2.5 }\nprint(f(1))", "returns"),
     ("print(max(1, 2.5))", "mixes int and float"),
@@ -186,6 +230,53 @@ PROGRAMS = {
     "format_fixes": 'x = 65\ny = -inf\nprint("{x:5c}|{y:%}")',
     "round_edges": "print(round(1.5, 9223372036854775807), round(-5000000000000000000, -18), "
                    "round(4999999999999999999, -19))",
+    "dicts": 'd = {a: 1, "b c": 2, "if": 3, _x: 4, "9z": 5, "": 6}\nprint(d, len(d), d.a, d["b c"])\n'
+             'd.a = 10\nd["new"] = 7\nd.a += 5\nd["new"] *= 3\nprint(d, keys(d), values(d), items(d))\n'
+             'print("a" in d, "zz" in d, "zz" not in d, has(d, "new"), has(d, "q"), contains(d, "a"))\n'
+             'print(get(d, "a", 0), get(d, "missing", -1))\n'
+             'for k in d { print(k, d[k]) }\nfor k, v in items(d) { print("{k}={v}") }\n'
+             'empty = {}\nprint(empty, len(empty), not empty, keys(empty))\nif d { print("non-empty") }\n'
+             'print(str(d), "{d}", [d, d])',
+    "dict_keys": 'sq = {}\nfor i in 1..5 { sq[i] = i * i }\nprint(sq, sq[3], get(sq, 9, 0), 2 in sq, 9 in sq)\n'
+                 'neg = {-1: "minus one", 0: "zero"}\nprint(neg, neg[-1])\n'
+                 'b = {true: "yes", false: "no"}\nprint(b, b[1 > 0])\n'
+                 'f = {1.5: "a", 2.0: "b", -0.0: "z"}\nprint(f, f[1.5], f[2], f[0.0], 2 in f, 3 in f, get(f, 2, "?"))\n'
+                 'f[2.0] = "B"\nprint(f)\nbig = {}\nfor i in 0..999 { big["k{i}"] = i }\n'
+                 'print(len(big), big["k0"], big["k500"], big["k999"], keys(big)[998])',
+    "dict_values": 'lists = {evens: [2, 4], odds: [1, 3]}\npush(lists.evens, 6)\nlists["primes"] = [2, 3, 5]\n'
+                   'print(lists, sum(lists.evens), len(lists["primes"]))\n'
+                   'floats = {x: 1.5, y: -2.25}\nfloats.x += 1\nprint(floats, floats.x * 2)\n'
+                   'nested = {outer: {inner: 1}}\nnested.outer.inner += 41\nnested.outer["more"] = 2\n'
+                   'print(nested, nested["outer"]["inner"])\n'
+                   'strs = {greeting: "hi"}\nstrs.greeting += "!"\nprint(strs, upper(strs.greeting))',
+    "dict_functions": 'fn count_words(text) {\n  counts = {}\n  for w in split(text) { counts[w] = get(counts, w, 0) + 1 }\n'
+                      '  counts\n}\nc = count_words("the cat and the hat and the bat")\nprint(c, c["the"], keys(c))\n'
+                      'fn total(d) {\n  t = 0\n  for k in d { t += d[k] }\n  t\n}\nprint(total(c))\n'
+                      'fn add(d, k) { d[k] = 1 }\nadd(c, "new")\nprint(c)\n'
+                      'd = {a: 1, b: 2}\nfor k in d { d[k + k] = 0 }\nprint(d)\n'
+                      'fn fill(l) { push(l, "x") }\nxs = []\nfill(xs)\nm = {}\nadd(m, "y")\nprint(xs, m)',
+    "mixed_lists": 'row = ["apples", 3, 0.5]\nprint(row, row[0], row[1], row[2], row[-1], row[-3], len(row))\n'
+                   'row[1] = 7\nrow[2] = 0.75\nrow[0] += "!"\nrow[1] += 1\nprint(row)\n'
+                   'label, qty, price = row\nprint(label, qty, price, price * qty)\n'
+                   'rows = [["a", 1], ["b", 2]]\npush(rows, ["c", 3])\nfor name, n in rows { print(name, n) }\n'
+                   'print(rows, len(rows), rows[2][0], [r[1] * 10 for r in rows])\n'
+                   'print([n for _, n in rows], [name + "!" for name, _ in rows], "{row}", str(row))\n'
+                   'nums = [1, 2.5]\nprint(nums, nums[0] + nums[1])\n'
+                   'x = ["s", nil, true, [1, 2], {k: 1}]\nprint(x, x[3][1], x[4].k)',
+    "unpacking": 'xs = [10, 20, 30]\na, b, c = xs\nprint(a, b, c)\np, q = "hi"\nprint(p, q)\n'
+                 'fs = [1.5, 2.5]\nu, v = fs\nprint(u + v)\npairs = [[1, 2], [3, 4]]\n'
+                 'for l, r in pairs { print(l + r) }\nprint([l * r for l, r in pairs])\n'
+                 'm = [0, 0]\nm[0], m[1] = xs[2], xs[0]\nd = {}\nd.x, d["y"] = 1, 2\n'
+                 'grid = [[0, 0], [0, 0]]\ngrid[0][1], grid[1][0] = [5, 6]\nprint(m, d, grid)\n'
+                 'k1, k2 = keys({one: 1, two: 2})\nprint(k1, k2)\n'
+                 'fn swap(pair) {\n  first, second = pair\n  [second, first]\n}\nprint(swap([1, 2]), swap(["x", "y"]))\n'
+                 'fn flip(full) {\n  given, family = split(full)\n  "{family}, {given}"\n}\nprint(flip("Ada Lovelace"))',
+    "items": 'd = {a: "x", b: "y"}\nfor k, v in items(d) { print(k + v) }\nps = items(d)\npush(ps, ["c", "z"])\n'
+             'n = {a: 1}\nni = items(n)\nprint(ps, ni, ni[0][0], ni[0][1] + 1)',
+    "string_tests": 'print(is_alpha("abc"), is_alpha("ab1"), is_alpha(""), is_alpha("A"), is_alpha(" "))\n'
+                    'print(is_digit("123"), is_digit("12a"), is_digit(""), is_digit("0"), "42".is_digit())',
+    "list_get": "xs = [10, 20, 30]\nprint(get(xs, 0, -1), get(xs, -1, -1), get(xs, 3, -1), get(xs, -4, -1))\n"
+                "fs = [1.5]\nprint(get(fs, 0, 0.0), get(fs, 5, 9.5))",
 }
 
 
@@ -239,6 +330,16 @@ def test_examples_differential(name):
     ('x = 1234567\nprint("{x:c}")', "invalid format spec 'c' for int"),
     ("x = 0\nprint(len(chr(x)))", "chr(0) is not supported by the native compiler"),
     ("fn d(n) => if n == 0 { 0 } else { 1 + d(n - 1) }\nprint(d(1000000))", "maximum recursion depth exceeded"),
+    ('d = {a: 1}\nprint(d["b"])', 'key "b" not found in dict'),
+    ("d = {1: 1}\nk = 2\nprint(d[k])", "key 2 not found in dict"),
+    ("d = {1.5: 1}\nprint(d[2.5])", "key 2.5 not found in dict"),
+    ("d = {true: 1}\nprint(d[false])", "key false not found in dict"),
+    ("d = {a: 1}\nprint(d.b)", "dict has no key `b`"),
+    ('d = {a: 1}\nd["b"] += 1', 'key "b" not found in dict'),
+    ("d = {a: 1}\nd.b += 1", "dict has no key `b`"),
+    ("xs = [1, 2]\na, b, c = xs", "cannot unpack 2 values into 3 variables"),
+    ('a, b = "abc"', "cannot unpack 3 values into 2 variables"),
+    ("for a, b in [[1, 2], [3]] { print(a) }", "cannot unpack 1 values into 2 loop variables"),
 ])
 def test_native_runtime_errors(code, message):
     requires_native()

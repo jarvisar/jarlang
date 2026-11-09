@@ -41,12 +41,12 @@ For example, a Binary node for `a + b` becomes a function that runs the function
 
 ### Native Compiler
 
-The `jarlang/native` folder contains the native compiler, which generates x86-64 assembly code from the AST and links it into an executable. Since JarLang doesn't require types, the compiler first works out the type of every variable and function (int, float, bool, str, or list). Each function is compiled once for every combination of argument types it is called with, e.g. `square(3)` and `square(1.5)` create two versions of `square`.
+The `jarlang/native` folder contains the native compiler, which generates x86-64 assembly code from the AST and links it into an executable. Since JarLang doesn't require types, the compiler first works out the type of every variable and function (int, float, bool, str, list, or dict). Each function is compiled once for every combination of argument types it is called with, e.g. `square(3)` and `square(1.5)` create two versions of `square`.
 
 * typecheck.py: works out the types of all variables, functions, and expressions
-* codegen.py: generates the assembly code for each node. Integers, strings, and lists are stored in the %rax register and decimals in the %xmm0 register
+* codegen.py: generates the assembly code for each node. Integers, strings, lists, and dicts are stored in the %rax register and decimals in the %xmm0 register
 * peephole.py: removes unnecessary instructions from the generated code
-* runtime.c: a small C library used for printing, strings, lists, and math functions
+* runtime.c: a small C library used for printing, strings, lists, dicts, and math functions
 * toolchain.py: finds a C compiler (gcc, clang, or zig) to assemble and link the code into an executable
 
 The generated assembly code includes comments showing which line of code each part comes from:
@@ -204,7 +204,7 @@ Run `scripts\test.cmd` or `bash scripts/test.sh`. This is the same as running `p
 
 ### Known Issues & Limitations
 
-The native compiler supports a subset of the language: integers, decimals, booleans, strings, lists, and functions. Programs that use dicts, closures, or try/catch have to be run with the interpreter. Native integers are also limited to 64 bits, so very large numbers that the interpreter can handle will cause an overflow error.
+The native compiler supports a subset of the language: integers, decimals, booleans, strings, lists, dicts, and functions. Programs that use anonymous functions, closures, imports, or try/catch have to be run with the interpreter, and each native dict holds a single key type and a single value type. Native integers are also limited to 64 bits, so very large numbers that the interpreter can handle will cause an overflow error.
 
 ### Differences from JarLang 1
 

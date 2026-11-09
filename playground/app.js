@@ -726,8 +726,9 @@
   const scheduleRefresh = debounce(refreshActiveTab, 450);
 
   function failureNodes(result) {
-    const nodes = [renderDiagnostics(result.stderr || "error: something went wrong")];
-    if (result.note) nodes.push(note(result.note));
+    // The note goes first because a long list of errors pushes anything after it out of view
+    const nodes = result.note ? [note(result.note)] : [];
+    nodes.push(renderDiagnostics(result.stderr || "error: something went wrong"));
     return nodes;
   }
 

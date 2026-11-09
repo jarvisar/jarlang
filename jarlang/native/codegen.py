@@ -10,8 +10,9 @@ from .. import __version__, ast
 from ..ast import GLOBAL
 from ..builtins import CONSTANTS
 from ..interpreter import MAX_DEPTH
-from .typecheck import MAIN_SCOPE, MATH1, FnInstance, TypeChecker
-from .types import BOOL, FLOAT, INT, NEVER, NIL, NUMERIC, STR, ListT, Type, descriptor
+from .typecheck import MAIN_SCOPE, MATH1, FnInstance, TypeChecker, _const_int
+from .types import (BOOL, FLOAT, INT, NEVER, NIL, NUMERIC, STR, DictT, ListT, TupleT, Type, descriptor,
+                    is_container, key_kind)
 
 # Same order as MATH_NAMES in runtime.c
 MATH_OPS = {name: i for i, name in enumerate((*MATH1, "log"))}
@@ -530,34 +531,21 @@ class CodeGen:
     def s_Assign(self, node: ast.Assign) -> None:
         target = node.target
         if isinstance(target, ast.ListLit):
-            # Evaluate every value first so a, b = b, a works, then assign left to right
-            values = node.value.items  # type: ignore[union-attr]
-            saved = []
-            for v in values:
-                self.gen_expr(v)
-                slot = self.temp()
-                self.store(slot, self.ty(v))
-                saved.append((slot, self.ty(v)))
-            for t_node, (slot, vt) in zip(target.items, saved):
-                if isinstance(t_node, ast.Name):
-                    dst_t = self.var_type(t_node)
-                    self.load(slot, vt)
-                    self.coerce(vt, dst_t)
-                    self.store_var(t_node, dst_t)
-                    continue
-                list_t = self.ty(t_node.obj)  # type: ignore[union-attr]
-                elem_t = list_t.elem if isinstance(list_t, ListT) else INT
-                if elem_t == FLOAT and vt != FLOAT:
-                    self.load(slot, vt)
-                    self.coerce(vt, FLOAT)
-                    self.store(slot, FLOAT)
-                self.gen_expr(t_node.obj)  # type: ignore[union-attr]
-                self.push(INT)
-                self.gen_expr(t_node.index)  # type: ignore[union-attr]
-                self.pop(INT, "%rcx")
-                self.list_element_address(t_node)
-                self.emit(f"movq {slot}, %r10")
-                self.emit("movq %r10, (%rdx,%rax,8)")
+            if isinstance(node.value, ast.ListLit) and len(node.value.items) == len(target.items):
+                # Evaluate every value first so a, b = b, a works, then assign left to right
+                saved = []
+                for v in node.value.items:
+                    self.gen_expr(v)
+                    slot = self.temp()
+                    self.store(slot, self.ty(v))
+                    saved.append((slot, self.ty(v)))
+                for t_node, (slot, vt) in zip(target.items, saved):
+                    self.store_from_slot(t_node, slot, vt)
+            else:
+                self.gen_unpack(target, node.value, node)
+            return
+        if isinstance(target, ast.Field) or isinstance(target, ast.Index) and isinstance(self.ty(target.obj), DictT):
+            self.assign_dict_entry(node)
             return
         if isinstance(target, ast.Name):
             dst_t = self.var_type(target)
@@ -574,8 +562,7 @@ class CodeGen:
             self.store_var(target, dst_t)
             return
         if isinstance(target, ast.Index):
-            list_t = self.ty(target.obj)
-            elem_t = list_t.elem if isinstance(list_t, ListT) else INT
+            elem_t = self.list_item_type(target)
             if node.op is not None:
                 # xs[i] += v: save the list and index, then do xs[i] = xs[i] + v
                 tl, ti = self.temp(), self.temp()
@@ -613,6 +600,133 @@ class CodeGen:
             return
         raise AssertionError("unsupported assignment target")  # pragma: no cover
 
+    def list_item_type(self, target: ast.Index) -> Type:
+        """Type of the items of the list in xs[i]."""
+        t = self.ty(target.obj)
+        if isinstance(t, TupleT):
+            i = _const_int(target.index)
+            return t.elems[i] if i is not None else INT
+        return t.elem if isinstance(t, ListT) and t.elem is not None else INT
+
+    def store_from_slot(self, target: ast.Expr, slot: str, vt: Type) -> None:
+        """Store a value saved in a frame slot into a variable, a list item, or a dict entry."""
+        if isinstance(target, ast.Name):
+            dst_t = self.var_type(target)
+            self.load(slot, vt)
+            self.coerce(vt, dst_t)
+            self.store_var(target, dst_t)
+            return
+        assert isinstance(target, (ast.Index, ast.Field))
+        dict_t = self.ty(target.obj)
+        if isinstance(dict_t, DictT):
+            self.coerce_slot(slot, vt, dict_t.val)
+            self.ccall("jl_dict_set", [I(lambda: self.gen_expr(target.obj)), self.dict_key_arg(target, dict_t),
+                                       Mem(slot), self.dict_kind(target, dict_t)])
+            return
+        assert isinstance(target, ast.Index)
+        self.coerce_slot(slot, vt, self.list_item_type(target))
+        self.gen_expr(target.obj)
+        self.push(INT)
+        self.gen_expr(target.index)
+        self.pop(INT, "%rcx")
+        self.list_element_address(target)
+        self.emit(f"movq {slot}, %r10")
+        self.emit("movq %r10, (%rdx,%rax,8)")
+
+    def coerce_slot(self, slot: str, vt: Type, dst: Type) -> None:
+        if dst == FLOAT and vt != FLOAT:
+            self.load(slot, vt)
+            self.coerce(vt, FLOAT)
+            self.store(slot, FLOAT)
+
+    def dict_key_arg(self, target: ast.Index | ast.Field, dict_t: DictT) -> Arg:
+        """The key of d[k] or d.name as a C argument (float keys are passed as their bits)."""
+        if isinstance(target, ast.Field):
+            return Lbl(self.string_label(target.name))
+        return I(lambda: self.gen_key(target.index, dict_t))
+
+    def gen_key(self, key: ast.Expr, dict_t: DictT) -> None:
+        """Leave a key in %rax, as a float's bits for a dict with float keys (where 2 finds 2.0)."""
+        key_t = dict_t.key if dict_t.key is not None else self.ty(key)
+        self.gen_expr(key)
+        self.coerce(self.ty(key), key_t)
+        self.float_bits_to_rax(key_t)
+
+    def dict_kind(self, target: ast.Index | ast.Field, dict_t: DictT) -> Arg:
+        return Imm(key_kind(STR if isinstance(target, ast.Field) else dict_t.key))
+
+    def assign_dict_entry(self, node: ast.Assign) -> None:
+        """d[k] = v, d.name = v, and compound assignments such as d[k] += 1."""
+        target = node.target
+        assert isinstance(target, (ast.Index, ast.Field))
+        dict_t = self.ty(target.obj)
+        assert isinstance(dict_t, DictT)
+        val_t = dict_t.val
+        kind = self.dict_kind(target, dict_t)
+        line = self.line_of(target)
+        value = self.temp()
+        if node.op is None:
+            # The interpreter evaluates the value before the dict and the key
+            self.gen_expr(node.value)
+            self.coerce(self.ty(node.value), val_t)
+            self.store(value, val_t)
+            self.ccall("jl_dict_set", [I(lambda: self.gen_expr(target.obj)), self.dict_key_arg(target, dict_t),
+                                       Mem(value), kind])
+            return
+        # d[k] += v: save the dict and key, look up the old value (which must exist), then store
+        d = self.temp()
+        self.gen_expr(target.obj)
+        self.emit(f"movq %rax, {d}")
+        key = self.dict_key_arg(target, dict_t)
+        if key.gen is not None:
+            key.gen()
+            k = self.temp()
+            self.emit(f"movq %rax, {k}")
+            key = Mem(k)
+
+        def load_old() -> None:
+            if isinstance(target, ast.Field):
+                self.ccall("jl_dict_field", [Mem(d), key, Imm(line)])
+            else:
+                self.ccall("jl_dict_get", [Mem(d), key, kind, Imm(line)])
+            self.rax_bits_to_value(val_t)
+        self.gen_binary(node.op, load_old, val_t, node.value, self.ty(node), node)
+        self.coerce(self.ty(node), val_t)
+        self.store(value, val_t)
+        self.ccall("jl_dict_set", [Mem(d), key, Mem(value), kind])
+
+    def gen_unpack(self, target: ast.ListLit, value_node: ast.Expr, node: ast.Node) -> None:
+        """a, b = value, for a list (checking its length) or a string."""
+        vt = self.ty(target)
+        count = len(target.items)
+        line = self.line_of(node)
+        src = self.temp()
+        self.gen_expr(value_node)
+        self.emit(f"movq %rax, {src}")
+        if isinstance(vt, TupleT):
+            types = list(vt.elems)
+        else:
+            types = [vt.elem if isinstance(vt, ListT) else STR] * count
+            if vt == STR:
+                self.ccall("jl_str_len", [Mem(src)])
+            else:
+                self.emit("movq (%rax), %rax")
+            ok = self.new_label("unpack")
+            self.emit(f"cmpq ${count}, %rax")
+            self.emit(f"je {ok}")
+            self.call_with_value("jl_panic_unpack", INT, [Imm(count), Imm(0), Imm(line)])
+            self.label(ok)
+        for i, (t_node, t) in enumerate(zip(target.items, types)):
+            if vt == STR:
+                self.ccall("jl_str_index", [Mem(src), Imm(i), Imm(line)])
+            else:
+                self.emit(f"movq {src}, %rax")
+                self.emit("movq 16(%rax), %rax")
+                self.emit(f"movq {8 * i}(%rax), %rax")
+            slot = self.temp()
+            self.emit(f"movq %rax, {slot}")  # a float's bits, so the slot holds the float
+            self.store_from_slot(t_node, slot, t)
+
     def list_element_address(self, node: ast.Node) -> None:
         """List in %rcx, index in %rax. Checks the index and leaves the data pointer in %rdx."""
         stub = self.panic_stub("index", self.line_of(node))
@@ -638,16 +752,46 @@ class CodeGen:
         self.emit(f"jmp {top}")
         self.label(end)
 
-    def s_For(self, node: ast.For, var: str | None = None, body_scope: int | None = None) -> None:
-        target = node.targets[0]
+    def loop_vars(self, targets: list[ast.Name]) -> list[tuple[str, str | None]]:
+        """The operand of each loop variable, and of its "assigned" flag if it has one."""
+        out = []
+        for target in targets:
+            key = self.name_key(target)
+            mark = self.flag_operand(key) if key is not None and key in self.flag_keys else None
+            out.append((self.var_operand(target), mark))
+        return out
+
+    def set_loop_vars(self, loop_vars: list[tuple[str, str | None]], line: int, check_len: bool) -> None:
+        """Store the item in %rax in the loop variables, unpacking it if there are several."""
+        if len(loop_vars) == 1:
+            var, mark = loop_vars[0]
+            self.emit(f"movq %rax, {var}")
+            if mark:
+                self.emit(f"movq $1, {mark}")
+            return
+        if check_len:  # a list[T] item, whose length is only known at run time
+            ok = self.new_label("unpack")
+            self.emit("movq %rax, %r11")
+            self.emit("movq (%rax), %rax")
+            self.emit(f"cmpq ${len(loop_vars)}, %rax")
+            self.emit(f"je {ok}")
+            self.call_with_value("jl_panic_unpack", INT, [Imm(len(loop_vars)), Imm(1), Imm(line)])
+            self.label(ok)
+            self.emit("movq %r11, %rax")
+        self.emit("movq 16(%rax), %rdx")
+        for i, (var, mark) in enumerate(loop_vars):
+            self.emit(f"movq {8 * i}(%rdx), %rcx")
+            self.emit(f"movq %rcx, {var}")
+            if mark:
+                self.emit(f"movq $1, {mark}")
+
+    def s_For(self, node: ast.For, loop_vars: list[tuple[str, str | None]] | None = None,
+              body_scope: int | None = None) -> None:
         it = node.iterable
         top, cont, end = self.new_label("for"), self.new_label("next"), self.new_label("endfor")
-        mark = None
-        if var is None:
-            var = self.var_operand(target)
-            key = self.name_key(target)
-            if key is not None and key in self.flag_keys:
-                mark = self.flag_operand(key)
+        if loop_vars is None:
+            loop_vars = self.loop_vars(node.targets)
+        var, mark = loop_vars[0]
         if isinstance(it, ast.RangeExpr) or self._is_range_call(it):
             cur, stop = self.temp(), self.temp()
             step_op = None
@@ -730,9 +874,11 @@ class CodeGen:
             self.emit(f"jmp {top}")
             self.label(end)
             return
-        # Loop over a list
+        # Loop over a list, or over a copy of a dict's keys (so the loop can change the dict)
         lst, idx = self.temp(), self.temp()
         self.gen_expr(it)
+        if isinstance(it_t, DictT):
+            self.call_with_value("jl_dict_keys", INT, [])
         self.emit(f"movq %rax, {lst}")
         self.emit(f"movq $0, {idx}")
         self.label(top)
@@ -742,9 +888,7 @@ class CodeGen:
         self.emit(f"jge {end}")
         self.emit("movq 16(%rcx), %rdx")
         self.emit("movq (%rdx,%rax,8), %rax")
-        self.emit(f"movq %rax, {var}")
-        if mark:
-            self.emit(f"movq $1, {mark}")
+        self.set_loop_vars(loop_vars, self.line_of(it), isinstance(it_t, ListT) and isinstance(it_t.elem, ListT))
         self.loop_body(node.body.stmts, end, cont, body_scope)
         self.label(cont)
         self.emit(f"incq {idx}")
@@ -841,7 +985,7 @@ class CodeGen:
         elif t == STR:
             self.emit("cmpb $0, (%rax)")
             self.emit(f"{'jne' if when else 'je'} {target}")
-        elif isinstance(t, ListT):
+        elif is_container(t):  # lists and dicts both start with their length
             self.emit("cmpq $0, (%rax)")
             self.emit(f"{'jne' if when else 'je'} {target}")
         else:  # pragma: no cover
@@ -931,6 +1075,8 @@ class CodeGen:
                 self.ccall("jl_sb_nil", [Mem(sb)])
             elif isinstance(t, ListT):
                 self.ccall("jl_sb_list", [Mem(sb), I(gen), Lbl(self.string_label(descriptor(t.elem or INT)))])
+            elif is_container(t):
+                self.ccall("jl_sb_value", [Mem(sb), I(gen), Lbl(self.string_label(descriptor(t)))])
         self.ccall("jl_sb_finish", [Mem(sb)])
 
     def e_Name(self, node: ast.Name) -> None:
@@ -942,16 +1088,15 @@ class CodeGen:
 
     def e_ListLit(self, node: ast.ListLit) -> None:
         t = self.ty(node)
-        elem = t.elem if isinstance(t, ListT) else INT
+        if isinstance(t, TupleT):
+            elems = list(t.elems)
+        else:
+            elems = [t.elem if isinstance(t, ListT) and t.elem is not None else INT] * len(node.items)
         lst = self.temp()
         self.ccall("jl_list_new", [Imm(len(node.items))])
         self.emit(f"movq %rax, {lst}")
-        for item in node.items:
-            def gen(item: ast.Expr = item) -> None:
-                self.gen_expr(item)
-                self.coerce(self.ty(item), elem)
-                self.float_bits_to_rax(elem)
-            self.ccall("jl_list_push", [Mem(lst), I(gen)])
+        for item, elem in zip(node.items, elems):
+            self.ccall("jl_list_push", [Mem(lst), I(self.value_bits(item, elem))])
         self.emit(f"movq {lst}, %rax")
 
     def e_Unary(self, node: ast.Unary) -> None:
@@ -1268,6 +1413,11 @@ class CodeGen:
         if op in ("in", "not in"):
             if bt == STR:
                 self.ccall("jl_str_contains", [Mem(b), Mem(a)])
+            elif isinstance(bt, DictT):
+                if bt.key == FLOAT and at == INT:  # 2 in d finds the key 2.0
+                    self.emit(f"cvtsi2sdq {a}, %xmm0")
+                    self.emit(f"movsd %xmm0, {a}")
+                self.ccall("jl_dict_has", [Mem(b), Mem(a), Imm(key_kind(bt.key if bt.key is not None else at))])
             else:
                 elem = bt.elem if isinstance(bt, ListT) else INT
                 if elem == FLOAT:
@@ -1361,6 +1511,24 @@ class CodeGen:
             self.ccall("jl_str_index", [I(lambda: self.gen_expr(node.obj)), I(lambda: self.gen_expr(node.index)),
                                         Imm(self.line_of(node))])
             return
+        if isinstance(ot, DictT):
+            self.ccall("jl_dict_get", [I(lambda: self.gen_expr(node.obj)), self.dict_key_arg(node, ot),
+                                       self.dict_kind(node, ot), Imm(self.line_of(node))])
+            self.rax_bits_to_value(ot.val)
+            return
+        if isinstance(ot, TupleT):
+            # The index is a number and the length never changes, so the type checker already checked it
+            i = _const_int(node.index)
+            assert i is not None
+            if i < 0:
+                i += len(ot.elems)
+            self.gen_expr(node.obj)
+            self.emit("movq 16(%rax), %rdx")
+            if ot.elems[i] == FLOAT:
+                self.emit(f"movsd {8 * i}(%rdx), %xmm0")
+            else:
+                self.emit(f"movq {8 * i}(%rdx), %rax")
+            return
         elem = ot.elem if isinstance(ot, ListT) else INT
         self.gen_expr(node.obj)
         src = self.simple_int_operand(node.index)
@@ -1377,18 +1545,39 @@ class CodeGen:
         else:
             self.emit("movq (%rdx,%rax,8), %rax")
 
+    def e_Field(self, node: ast.Field) -> None:
+        self.ccall("jl_dict_field", [I(lambda: self.gen_expr(node.obj)), Lbl(self.string_label(node.name)),
+                                     Imm(self.line_of(node))])
+        t = self.ty(node.obj)
+        self.rax_bits_to_value(t.val if isinstance(t, DictT) else INT)
+
+    def e_DictLit(self, node: ast.DictLit) -> None:
+        t = self.ty(node)
+        assert isinstance(t, DictT)
+        d = self.temp()
+        self.ccall("jl_dict_new", [])
+        self.emit(f"movq %rax, {d}")
+        for k, v in node.entries:
+            def gen_val(v: ast.Expr = v) -> None:
+                self.gen_expr(v)
+                self.coerce(self.ty(v), t.val)
+                self.float_bits_to_rax(t.val)
+            self.ccall("jl_dict_set", [Mem(d), I(lambda k=k: self.gen_key(k, t)), I(gen_val),
+                                       Imm(key_kind(t.key))])
+        self.emit(f"movq {d}, %rax")
+
     def e_Comprehension(self, node: ast.Comprehension) -> None:
         result = self.temp()
         self.ccall("jl_list_new", [Imm(0)])
         self.emit(f"movq %rax, {result}")
         elem_t = self.ty(node.expr)
-        # The loop variable is in the comprehension's own scope (s_For handles this with body_scope)
+        # The loop variables are in the comprehension's own scope (s_For handles this with body_scope)
         self.fn.scopes.append(id(node))
-        var = self.var_operand(node.targets[0])
+        loop_vars = [(self.var_operand(t), None) for t in node.targets]
         self.fn.scopes.pop()
         body = ast.Block([_ComprehensionBody(node, result, elem_t)], span=node.span)  # type: ignore[list-item]
-        loop = ast.For([node.targets[0]], node.iterable, body, span=node.span)
-        self.s_For(loop, var=var, body_scope=id(node))
+        loop = ast.For(node.targets, node.iterable, body, span=node.span)
+        self.s_For(loop, loop_vars=loop_vars, body_scope=id(node))
         self.emit(f"movq {result}, %rax")
 
     def s__ComprehensionBody(self, marker: "_ComprehensionBody") -> None:
@@ -1601,9 +1790,10 @@ class CodeGen:
             elif t == NIL:
                 self.gen_expr(args[0])
                 self.emit(f"leaq {self.string_label('nil')}(%rip), %rax")
+            elif isinstance(t, ListT):
+                self.ccall("jl_str_from_list", [I(g(0)), Lbl(self.string_label(descriptor(t.elem or INT)))])
             else:
-                elem = t.elem if isinstance(t, ListT) else INT
-                self.ccall("jl_str_from_list", [I(g(0)), Lbl(self.string_label(descriptor(elem or INT)))])
+                self.ccall("jl_str_from_value", [I(g(0)), Lbl(self.string_label(descriptor(t)))])
             return
         if name == "len":
             if ts[0] == STR:
@@ -1729,7 +1919,39 @@ class CodeGen:
             else:
                 self.ccall("jl_exit", [Imm(0)])
             return
+        if name in ("is_alpha", "is_digit"):
+            self.ccall(f"jl_str_{name}", [I(g(0))])
+            return
+        if name in ("keys", "values", "items"):
+            self.ccall(f"jl_dict_{name}", [I(g(0))])
+            return
+        if name in ("has", "get"):
+            coll = ts[0]
+            result = self.ty(node)
+            if isinstance(coll, ListT):  # get(xs, i, default)
+                fallback = I(self.value_bits(args[2], result)) if len(args) == 3 else Imm(0)
+                self.ccall("jl_list_get_or", [I(g(0)), I(g(1)), fallback])
+                self.rax_bits_to_value(result)
+                return
+            assert isinstance(coll, DictT)
+            key = I(lambda: self.gen_key(args[1], coll))
+            kind = Imm(key_kind(coll.key if coll.key is not None else ts[1]))
+            if name == "has":
+                self.ccall("jl_dict_has", [I(g(0)), key, kind])
+                return
+            fallback = I(self.value_bits(args[2], result)) if len(args) == 3 else Imm(0)
+            self.ccall("jl_dict_get_or", [I(g(0)), key, fallback, kind])
+            self.rax_bits_to_value(result)
+            return
         raise AssertionError(f"builtin {name} not implemented in codegen")  # pragma: no cover
+
+    def value_bits(self, node: ast.Expr, t: Type) -> Callable[[], None]:
+        """Code that leaves the value of node, converted to type t, in %rax (a float as its bits)."""
+        def gen() -> None:
+            self.gen_expr(node)
+            self.coerce(self.ty(node), t)
+            self.float_bits_to_rax(t)
+        return gen
 
     def print_value(self, arg: ast.Expr, t: Type) -> None:
         gen = (lambda: self.gen_expr(arg))
@@ -1746,6 +1968,8 @@ class CodeGen:
             self.ccall("jl_print_nil", [])
         elif isinstance(t, ListT):
             self.ccall("jl_print_list", [I(gen), Lbl(self.string_label(descriptor(t.elem or INT)))])
+        elif is_container(t):
+            self.ccall("jl_print_value", [I(gen), Lbl(self.string_label(descriptor(t)))])
 
     def print_stored(self, slot: str, t: Type) -> None:
         if t == INT:
@@ -1760,6 +1984,8 @@ class CodeGen:
             self.ccall("jl_print_nil", [])
         elif isinstance(t, ListT):
             self.ccall("jl_print_list", [Mem(slot), Lbl(self.string_label(descriptor(t.elem or INT)))])
+        elif is_container(t):
+            self.ccall("jl_print_value", [Mem(slot), Lbl(self.string_label(descriptor(t)))])
 
     def gen_minmax(self, name: str, args: list[ast.Expr], ts: list[Type]) -> None:
         t = ts[0]

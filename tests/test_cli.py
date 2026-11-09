@@ -143,8 +143,8 @@ def test_check_examples_directory_is_clean():
 
 
 def test_check_native_flag(tmp_path):
-    prog = tmp_path / "dicty.jlang"
-    prog.write_text("d = {a: 1}\nprint(d)\n", encoding="utf-8")
+    prog = tmp_path / "lambda.jlang"
+    prog.write_text("f = fn(x) => x * 2\nprint(f(3))\n", encoding="utf-8")
     assert jarlang("check", str(prog)).returncode == 0
     r = jarlang("check", "--native", str(prog))
     assert r.returncode == 1 and "not supported by the native compiler" in r.stderr

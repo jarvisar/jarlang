@@ -9,34 +9,39 @@ The native compiler converts JarLang code into x86-64 assembly code, then uses a
 ### Supported Code
 The native compiler supports a subset of the language:
 
-* Integers (64 bits), decimals, booleans, strings, nil, and lists
+* Integers (64 bits), decimals, booleans, strings, nil, lists, and dicts
 * Functions defined with `fn` or `f(x) = ...`, including recursion and default values
 * If, while, and for loops, break, continue, and return
+* Assigning several variables at once, including unpacking a list (`a, b = pair` and `for k, v in items(d)`)
 * Strings with values inside them, list comprehensions, pipelines, and method calls
-* 65 of the built-in functions (marked with (native) in [builtins.md](builtins.md)), including `input`
+* 72 of the built-in functions (marked with (native) in [builtins.md](builtins.md)), including `input`
 
-Dicts, anonymous functions, closures, functions inside functions, try and catch, throw, imports, and `argv` have to be run with the interpreter. `jarlang check --native file.jlang` shows what isn't supported without compiling.
+Anonymous functions, closures, functions inside functions, try and catch, throw, imports, and `argv` have to be run with the interpreter. `jarlang check --native file.jlang` shows what isn't supported without compiling.
 
 ### Types
-Since JarLang doesn't require types, the compiler first works out the type of every variable, function, and expression. The types are int, float, bool, str, nil, and list.
+Since JarLang doesn't require types, the compiler first works out the type of every variable, function, and expression. The types are int, float, bool, str, nil, list, and dict.
 
 Each function is compiled once for every combination of argument types it is called with. For example, `square(3)` and `square(1.5)` create two versions of `square`, one for integers and one for decimals.
 
 The type of a variable is worked out from the values assigned to it, and the return type of a function from its return statements and last value. `push(xs, 1)` and `xs[i] = 1` set the type of the values in a list, so `xs = []` also works. The compiler goes through the program several times until the types stop changing. For example, in the first pass it finds that `fib` returns `n`, an int, and in the second pass it uses that to work out the type of `fib(n - 1) + fib(n - 2)`.
+
+A list whose items have the same type is shown as `list[int]`. A list that mixes types, such as `["apples", 3, 0.5]`, gets a type for each position instead, shown as `[str, int, float]`. Its length can't change, it can only be indexed with a number (`item[0]`), and it can be printed and unpacked (`label, qty, price = item`), but not looped over or used with builtins such as `sum` and `sort`.
+
+A dict has one key type and one value type, shown as `dict[str, int]`. Keys can be ints, decimals, booleans, or strings, and `d = {}` gets its types from `d[k] = v`, like `xs = []`. Dicts keep their keys in the order they were added, like the interpreter. `get(d, k)` needs a default value, e.g. `get(d, k, 0)`, since it returns nil for a missing key.
 
 A variable can't hold both an int and a decimal. The interpreter would print `1` for an int where native code would print `1.0`, so the compiler shows an error and suggests writing `0.0` instead of `0`. Adding an int and a decimal still works and returns a decimal.
 
 ### Code Generation
 `codegen.py` generates the assembly code for each node:
 
-* Integers, booleans, strings, and lists are stored in the %rax register and decimals in the %xmm0 register
+* Integers, booleans, strings, lists, and dicts are stored in the %rax register and decimals in the %xmm0 register
 * Binary operations generate the left side, save it on the stack, generate the right side, then combine them. If the right side is a number or variable, it is used directly
 * Each function has a stack frame with a slot for each parameter, variable, and temporary value
 * Arguments to JarLang functions are pushed onto the stack, and the result is returned in %rax or %xmm0
 * Calls to C functions use the Linux and macOS calling convention (System V) or the Windows one (arguments in registers plus 32 bytes of shadow space)
 * The compiler keeps track of how much is on the stack, so the stack is always aligned to 16 bytes before a call
 
-Integer overflow, division by zero, list indexes, and math errors are checked, and stop the program with the same error message as the interpreter. Variables that might be used before they are assigned are also checked, and recursion deeper than 2500 calls stops with the same error as the interpreter. The assembly code includes comments showing which line of code each part comes from.
+Integer overflow, division by zero, list indexes, missing dict keys, and math errors are checked, and stop the program with the same error message as the interpreter. Variables that might be used before they are assigned are also checked, and recursion deeper than 2500 calls stops with the same error as the interpreter. The assembly code includes comments showing which line of code each part comes from.
 
 ### Optimizations
 * Calculations with constant numbers are done at compile time, e.g. `2^10` becomes `1024`
@@ -49,7 +54,7 @@ Integer overflow, division by zero, list indexes, and math errors are checked, a
 
 * Printing, including decimals printed the same way as Python
 * String formatting such as `{x:>8.2f}`
-* Strings and lists
+* Strings, lists, and dicts (a hash table that keeps the keys in the order they were added)
 * Math functions, with the same errors as the interpreter. On Windows, the math functions are loaded from the same library Python uses so the results match exactly
 
 Memory is never freed, since JarLang programs are short.
@@ -61,7 +66,7 @@ Memory is never freed, since JarLang programs are short.
 
 ### Known Differences
 * Native integers are 64 bits, so very large numbers cause an overflow error instead of working like in the interpreter
-* `upper`, `lower`, and `trim` only work with ASCII characters
+* `upper`, `lower`, `trim`, `is_alpha`, and `is_digit` only work with ASCII characters, and dict keys with other characters are printed in quotes
 * The gamma function (e.g. `0.5!`) can be different in the last digit
 * An int raised to a negative int variable, e.g. `2^x` with `x = -1`, stops with an error. The interpreter returns `0.5`. Written as a number, `2^-1` works
 * Strings can't contain a zero character (`"\0"` or `chr(0)`), since native strings end at a zero byte

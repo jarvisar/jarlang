@@ -121,8 +121,8 @@ Functions that take a list take it as the first argument, so `xs.map(f)` and `xs
 * `chars(s)` (native): List of the characters in a string.
 * `chr(code)` (native): One-character string for a Unicode code point.
 * `ends_with(s, suffix)` (native): True if s ends with suffix.
-* `is_alpha(s)`: True if the string is non-empty and all letters.
-* `is_digit(s)`: True if the string is non-empty and all digits.
+* `is_alpha(s)` (native): True if the string is non-empty and all letters.
+* `is_digit(s)` (native): True if the string is non-empty and all digits.
 * `lines(s)`: List of the lines in a string.
 * `lower(s)` (native): Lowercase copy of a string.
 * `ord(ch)` (native): Unicode code point of a one-character string.
@@ -135,11 +135,11 @@ Functions that take a list take it as the first argument, so `xs.map(f)` and `xs
 
 ### Dicts
 
-* `get(d, key, default=nil)`: d[key] if present, otherwise `default` (nil).
-* `has(d, key)`: True if the dict has the key.
-* `items(d)`: List of [key, value] pairs, for use with `for k, v in items(d)`.
-* `keys(d)`: List of a dict's keys.
-* `values(d)`: List of a dict's values.
+* `get(d, key, default=nil)` (native): d[key] if present, otherwise `default` (nil). Also works with a list and an index.
+* `has(d, key)` (native): True if the dict has the key.
+* `items(d)` (native): List of [key, value] pairs, for use with `for k, v in items(d)`.
+* `keys(d)` (native): List of a dict's keys.
+* `values(d)` (native): List of a dict's values.
 
 ### Conversions
 
